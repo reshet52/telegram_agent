@@ -1,12 +1,14 @@
-.DS_Store
 .env
-venv/
+
+/venv/
 __pycache__/
 *.pyc
 
 *.session
 *.session-journal
 
-data/
-memory/
-exports/
+/data/
+/memory/
+/exports/
+
+.DS_Store

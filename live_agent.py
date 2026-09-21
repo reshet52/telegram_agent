@@ -46,11 +46,11 @@ from mybot.episodes.incremental import (
     process_live_episode_message
 )
 
-from incremental_memory import (
+from mybot.memory.incremental import (
     update_incremental_memory
 )
 
-from memory_manager import load_agent_memory
+from mybot.memory.manager import load_agent_memory
 from mybot.telegram.client import client
 
 

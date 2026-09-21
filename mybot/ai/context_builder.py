@@ -1,7 +1,7 @@
 import json
 
 from mybot.episodes.search import find_similar_episodes
-from memory_search import find_relevant_memories
+from mybot.memory.search import find_relevant_memories
 
 
 def build_dialog_context(messages):
