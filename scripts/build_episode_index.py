@@ -4,7 +4,7 @@ from pathlib import Path
 
 from openai import AsyncOpenAI
 
-from config import Config
+from mybot.config import Config
 
 
 EPISODES_FILE = Path(

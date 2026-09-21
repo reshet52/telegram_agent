@@ -6,7 +6,7 @@ from mybot.ai.client import (
     analyze_incremental_memory
 )
 
-from config import Config
+from mybot.config import Config
 from mybot.storage.history import load_all_messages
 from mybot.ai.style_analyzer import (
     build_full_history_text

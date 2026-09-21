@@ -2,7 +2,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from config import Config
+from mybot.config import Config
 from mybot.storage.history import load_all_messages
 
 

@@ -1,6 +1,6 @@
 from openai import AsyncOpenAI
 
-from config import Config
+from mybot.config import Config
 
 
 ai_client = AsyncOpenAI(

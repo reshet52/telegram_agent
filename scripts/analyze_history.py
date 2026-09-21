@@ -2,7 +2,7 @@ import asyncio
 from pathlib import Path
 
 from mybot.ai.client import analyze_full_history
-from config import Config
+from mybot.config import Config
 from mybot.storage.history import (
     load_all_messages,
     split_messages_into_chunks

@@ -5,7 +5,7 @@ from pathlib import Path
 
 from openai import AsyncOpenAI
 
-from config import Config
+from mybot.config import Config
 from mybot.storage.history import load_last_messages
 
 

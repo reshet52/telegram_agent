@@ -9,7 +9,7 @@ from mybot.storage.deletions import (
     load_deleted_message_ids
 )
 
-from config import Config
+from mybot.config import Config
 
 
 EPISODES_FILE = Path(

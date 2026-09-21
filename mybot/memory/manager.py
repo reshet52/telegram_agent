@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from config import Config
+from mybot.config import Config
 
 def load_json_file(filename):
     file_path = Path(filename)

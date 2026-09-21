@@ -1,6 +1,6 @@
 import json
 
-from config import Config
+from mybot.config import Config
 
 
 def get_file_data(message):

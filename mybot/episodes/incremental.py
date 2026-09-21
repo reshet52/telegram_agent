@@ -3,7 +3,7 @@ from collections import deque
 from datetime import datetime
 
 from mybot.ai.client import ai_client
-from config import Config
+from mybot.config import Config
 from mybot.storage.history import load_all_messages
 
 
