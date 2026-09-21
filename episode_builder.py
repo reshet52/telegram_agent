@@ -3,7 +3,7 @@ from datetime import datetime
 from pathlib import Path
 
 from config import Config
-from history_reader import load_all_messages
+from mybot.storage.history import load_all_messages
 
 
 OUTPUT_FILE = Path("memory/episodes.jsonl")

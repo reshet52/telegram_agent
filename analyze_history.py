@@ -3,7 +3,7 @@ from pathlib import Path
 
 from ai_client import analyze_full_history
 from config import Config
-from history_reader import (
+from mybot.storage.history import (
     load_all_messages,
     split_messages_into_chunks
 )

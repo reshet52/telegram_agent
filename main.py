@@ -1,13 +1,13 @@
 from ai_client import generate_answers
 from config import Config
 from context_builder import build_ai_request
-from dialogs import choose_dialog
-from exporter import export_dialog
-from history_reader import load_last_messages, print_messages
+from mybot.telegram.dialogs import choose_dialog
+from mybot.telegram.exporter import export_dialog
+from mybot.storage.history import load_last_messages, print_messages
 from memory_manager import load_agent_memory
-from history_reader import load_all_messages
+from mybot.storage.history import load_all_messages
 from style_analyzer import build_style_analysis_request
-from telegram_client import client
+from mybot.telegram.client import client
 
 
 async def main():

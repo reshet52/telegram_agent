@@ -13,28 +13,28 @@ from telegram.ext import (
     filters
 )
 
-from workspace_manager import (
+from mybot.storage.workspace import (
     create_workspace
 )
 
 from ai_client import generate_answers
 from config import Config
 from context_builder import build_ai_request
-from dialogs import choose_dialog
+from mybot.telegram.dialogs import choose_dialog
 
-from exporter import (
+from mybot.telegram.exporter import (
     append_message_data,
     append_messages_data,
     fetch_messages_after,
     message_to_data
 )
 
-from deletion_manager import (
+from mybot.storage.deletions import (
     check_recent_deletions,
     mark_messages_deleted
 )
 
-from history_reader import (
+from mybot.storage.history import (
     get_last_saved_message_id,
     load_all_messages,
     load_last_messages,
@@ -51,7 +51,7 @@ from incremental_memory import (
 )
 
 from memory_manager import load_agent_memory
-from telegram_client import client
+from mybot.telegram.client import client
 
 
 RECENT_MESSAGES_LIMIT = 15

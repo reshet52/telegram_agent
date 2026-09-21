@@ -2,7 +2,7 @@ import json
 from collections import deque
 
 from config import Config
-from deletion_manager import (
+from mybot.storage.deletions import (
     load_deleted_message_ids
 )
 

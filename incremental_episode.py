@@ -4,7 +4,7 @@ from datetime import datetime
 
 from ai_client import ai_client
 from config import Config
-from history_reader import load_all_messages
+from mybot.storage.history import load_all_messages
 
 
 EPISODES_FILE = "memory/episodes.jsonl"

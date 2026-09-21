@@ -6,7 +6,7 @@ from pathlib import Path
 from openai import AsyncOpenAI
 
 from config import Config
-from history_reader import load_last_messages
+from mybot.storage.history import load_last_messages
 
 
 BASE_EMBEDDINGS_FILE = Path(

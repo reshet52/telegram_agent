@@ -5,7 +5,7 @@ from pathlib import Path
 
 from openai import AsyncOpenAI
 
-from deletion_manager import (
+from mybot.storage.deletions import (
     load_deleted_message_ids
 )
 

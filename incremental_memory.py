@@ -7,7 +7,7 @@ from ai_client import (
 )
 
 from config import Config
-from history_reader import load_all_messages
+from mybot.storage.history import load_all_messages
 from style_analyzer import (
     build_full_history_text
 )
