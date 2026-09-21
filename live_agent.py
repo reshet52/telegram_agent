@@ -41,7 +41,7 @@ from mybot.storage.history import (
     print_messages
 )
 
-from incremental_episode import (
+from mybot.episodes.incremental import (
     initialize_episode_tracker,
     process_live_episode_message
 )

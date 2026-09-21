@@ -1,6 +1,6 @@
 import json
 
-from episode_search import find_similar_episodes
+from mybot.episodes.search import find_similar_episodes
 from memory_search import find_relevant_memories
 
 
