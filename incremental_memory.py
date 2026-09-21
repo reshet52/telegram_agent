@@ -1,14 +1,14 @@
 import json
 from pathlib import Path
 
-from ai_client import (
+from mybot.ai.client import (
     ai_client,
     analyze_incremental_memory
 )
 
 from config import Config
 from mybot.storage.history import load_all_messages
-from style_analyzer import (
+from mybot.ai.style_analyzer import (
     build_full_history_text
 )
 

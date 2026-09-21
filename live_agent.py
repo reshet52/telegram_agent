@@ -17,9 +17,9 @@ from mybot.storage.workspace import (
     create_workspace
 )
 
-from ai_client import generate_answers
+from mybot.ai.client import generate_answers
 from config import Config
-from context_builder import build_ai_request
+from mybot.ai.context_builder import build_ai_request
 from mybot.telegram.dialogs import choose_dialog
 
 from mybot.telegram.exporter import (

@@ -1,6 +1,6 @@
 import asyncio
 
-from ai_client import test_ai_connection
+from mybot.ai.client import test_ai_connection
 
 
 async def main():

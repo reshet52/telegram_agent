@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 import asyncio
-from ai_client import merge_memory_category
+from mybot.ai.client import merge_memory_category
 
 
 CHUNKS_FOLDER = Path("memory/chunk_analysis")

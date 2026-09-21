@@ -1,13 +1,13 @@
 import asyncio
 from pathlib import Path
 
-from ai_client import analyze_full_history
+from mybot.ai.client import analyze_full_history
 from config import Config
 from mybot.storage.history import (
     load_all_messages,
     split_messages_into_chunks
 )
-from style_analyzer import build_full_history_text
+from mybot.ai.style_analyzer import build_full_history_text
 
 
 CHUNK_SIZE = 500
