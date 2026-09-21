@@ -1,10 +1,6 @@
 import asyncio
 from telethon import events
-
-import re
-
 from telegram import Update
-
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -12,46 +8,35 @@ from telegram.ext import (
     MessageHandler,
     filters
 )
-
-from mybot.storage.workspace import (
-    create_workspace
-)
-
-from mybot.ai.client import generate_answers
+from mybot.storage.workspace import create_workspace
 from mybot.config import Config
-from mybot.ai.context_builder import build_ai_request
 from mybot.telegram.dialogs import choose_dialog
-
 from mybot.telegram.exporter import (
     append_message_data,
     append_messages_data,
     fetch_messages_after,
     message_to_data
 )
-
 from mybot.storage.deletions import (
     check_recent_deletions,
     mark_messages_deleted
 )
-
 from mybot.storage.history import (
     get_last_saved_message_id,
     load_all_messages,
     load_last_messages,
     print_messages
 )
-
 from mybot.episodes.incremental import (
     initialize_episode_tracker,
     process_live_episode_message
 )
-
-from mybot.memory.incremental import (
-    update_incremental_memory
-)
-
+from mybot.memory.incremental import update_incremental_memory
 from mybot.memory.manager import load_agent_memory
 from mybot.telegram.client import client
+from mybot.services.reply_service import (
+    ReplyService
+)
 
 
 RECENT_MESSAGES_LIMIT = 15
@@ -74,7 +59,6 @@ def display_message(message):
 
 async def main():
     current_mood = None
-    generation_lock = asyncio.Lock()
     message_processing_lock = (
         asyncio.Lock()
     )
@@ -236,6 +220,11 @@ async def main():
 
     memory = load_agent_memory()
 
+    reply_service = ReplyService(
+        recent_messages=recent_messages,
+        memory=memory
+    )
+
     print(
         "\nПроверяю новые эпизоды..."
     )
@@ -260,104 +249,6 @@ async def main():
             "Новых завершённых "
             "эпизодов нет."
         )
-
-
-    def apply_mood_to_instruction(
-        instruction
-    ):
-        if not current_mood:
-            return instruction
-
-        return f"""
-{instruction}
-
-ВРЕМЕННОЕ СОСТОЯНИЕ ПОЛЬЗОВАТЕЛЯ:
-
-{current_mood}
-
-Это состояние относится только к текущей
-сессии и не является постоянным фактом
-о пользователе.
-
-Учитывай его при составлении ответа.
-
-ВАЖНО:
-- не сообщай состояние напрямую,
-  если пользователь сам этого не попросил;
-- передавай его через тон, энергию,
-  длину, эмоциональность и формулировки;
-- сохраняй естественную реакцию
-  на сообщения собеседника;
-- сохраняй обычный стиль пользователя;
-- любовный ответ может оставаться любовным,
-  но с указанным эмоциональным оттенком.
-""".strip()
-
-
-    async def generate_bot_answers(
-        instruction=None
-    ):
-        if not instruction:
-            instruction = (
-                "Ответь естественно, "
-                "полностью сохраняя "
-                "мой стиль общения."
-            )
-
-        instruction = (
-            apply_mood_to_instruction(
-                instruction
-            )
-        )
-
-        messages_snapshot = list(
-            recent_messages
-        )
-
-        async with generation_lock:
-            ai_request = (
-                await build_ai_request(
-                    messages_snapshot,
-                    instruction,
-                    memory
-                )
-            )
-
-            with open(
-                Config.AI_REQUEST_PREVIEW,
-                "w",
-                encoding="utf-8"
-            ) as file:
-                file.write(
-                    ai_request
-                )
-
-            answers = await generate_answers(
-                ai_request
-            )
-
-        return answers
-
-
-    def split_answer_variants(text):
-        pattern = (
-            r"(?ms)^\s*[123][\.\)]\s*"
-            r"(.*?)"
-            r"(?=^\s*[123][\.\)]\s*|\Z)"
-        )
-
-        variants = [
-            item.strip()
-            for item in re.findall(
-                pattern,
-                text
-            )
-        ]
-
-        if len(variants) == 3:
-            return variants
-
-        return [text.strip()]
 
 
     def format_messages_for_bot(
@@ -529,8 +420,9 @@ async def main():
 
         try:
             answers = (
-                await generate_bot_answers(
-                    instruction
+                await reply_service.generate(
+                    instruction=instruction,
+                    current_mood=current_mood
                 )
             )
 
@@ -545,8 +437,10 @@ async def main():
             "3 варианта:"
         )
 
-        variants = split_answer_variants(
-            answers
+        variants = (
+            reply_service.split_variants(
+                answers
+            )
         )
 
         for variant in variants:
@@ -1153,70 +1047,17 @@ async def main():
                 "мой стиль общения."
             )
 
-        if current_mood:
-            user_instruction = f"""
-{user_instruction}
-
-ВРЕМЕННОЕ СОСТОЯНИЕ ПОЛЬЗОВАТЕЛЯ:
-
-{current_mood}
-
-Это состояние относится только к текущей
-сессии и не является постоянным фактом
-о пользователе.
-
-Учитывай его при составлении ответа.
-
-ВАЖНО:
-- не сообщай это состояние собеседнику
-  напрямую, если пользователь сам
-  этого не попросил;
-- состояние должно чувствоваться через
-  тон, энергию, длину сообщений,
-  эмоциональность и формулировки;
-- сохраняй естественную реакцию на
-  сообщения собеседника;
-- не разрушай обычный стиль пользователя;
-- если собеседник пишет любовно,
-  ответ всё ещё может быть любовным,
-  но с указанным эмоциональным оттенком.
-""".strip()
-
-        # ВОТ ОТСЮДА УЖЕ НЕ ВНУТРИ if current_mood
-
-        messages_snapshot = list(
-            recent_messages
-        )
-
         print(
-            "\nПодготавливаю контекст..."
+            "\nОтправляю запрос ИИ..."
         )
 
         try:
-            ai_request = (
-                await build_ai_request(
-                    messages_snapshot,
-                    user_instruction,
-                    memory
-                )
-            )
-
-            with open(
-                Config.AI_REQUEST_PREVIEW,
-                "w",
-                encoding="utf-8"
-            ) as file:
-                file.write(
-                    ai_request
-                )
-
-            print(
-                "Отправляю запрос ИИ..."
-            )
-
             answers = (
-                await generate_answers(
-                    ai_request
+                await reply_service.generate(
+                    instruction=
+                        user_instruction,
+                    current_mood=
+                        current_mood
                 )
             )
 
