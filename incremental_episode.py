@@ -1,0 +1,521 @@
+import json
+from collections import deque
+from datetime import datetime
+
+from ai_client import ai_client
+from config import Config
+from history_reader import load_all_messages
+
+
+EPISODES_FILE = "memory/episodes.jsonl"
+
+# Новые embeddings будем хранить отдельно.
+# Старый большой файл не переписываем.
+LIVE_EMBEDDINGS_FILE = (
+    "memory/episode_embeddings_live.jsonl"
+)
+
+PREVIOUS_CONTEXT_LIMIT = 20
+
+
+def message_to_text(message):
+    text = message.get("text")
+    message_type = message.get(
+        "type",
+        "text"
+    )
+
+    if text:
+        return text
+
+    return f"[{message_type.upper()}]"
+
+
+def load_last_episode():
+    last_episode = None
+
+    try:
+        with open(
+            EPISODES_FILE,
+            "r",
+            encoding="utf-8"
+        ) as file:
+            for line in file:
+                if line.strip():
+                    last_episode = json.loads(
+                        line
+                    )
+
+    except FileNotFoundError:
+        return None
+
+    return last_episode
+
+
+def get_last_episode_info():
+    last_episode = load_last_episode()
+
+    if not last_episode:
+        return 0, 0
+
+    episode_id = last_episode.get(
+        "episode_id",
+        0
+    )
+
+    response = last_episode.get(
+        "response",
+        []
+    )
+
+    if not response:
+        return episode_id, 0
+
+    last_message_id = (
+        response[-1].get(
+            "message_id",
+            0
+        )
+        or 0
+    )
+
+    return (
+        episode_id,
+        last_message_id
+    )
+
+
+def append_episode(episode):
+    with open(
+        EPISODES_FILE,
+        "a",
+        encoding="utf-8"
+    ) as file:
+        file.write(
+            json.dumps(
+                episode,
+                ensure_ascii=False
+            )
+        )
+
+        file.write("\n")
+
+
+def parse_date(value):
+    if not value:
+        return None
+
+    try:
+        return datetime.fromisoformat(
+            value
+        )
+    except ValueError:
+        return None
+
+
+def calculate_response_delay(
+    incoming,
+    response
+):
+    if not incoming or not response:
+        return None
+
+    incoming_date = parse_date(
+        incoming[-1].get("date")
+    )
+
+    response_date = parse_date(
+        response[0].get("date")
+    )
+
+    if (
+        incoming_date is None
+        or response_date is None
+    ):
+        return None
+
+    return (
+        response_date
+        - incoming_date
+    ).total_seconds()
+
+
+def build_embedding_text(episode):
+    lines = []
+
+    for message in episode.get(
+        "incoming",
+        []
+    ):
+        lines.append(
+            message_to_text(
+                message
+            )
+        )
+
+    return "\n".join(lines)
+
+
+async def create_embeddings(
+    episodes
+):
+    if not episodes:
+        return []
+
+    texts = [
+        build_embedding_text(
+            episode
+        )
+        for episode in episodes
+    ]
+
+    response = (
+        await ai_client.embeddings.create(
+            model=Config.EMBEDDING_MODEL,
+            input=texts
+        )
+    )
+
+    results = []
+
+    for episode, item in zip(
+        episodes,
+        response.data
+    ):
+        results.append({
+            "episode_id":
+                episode["episode_id"],
+            "embedding":
+                item.embedding
+        })
+
+    return results
+
+
+def append_embedding_records(
+    records
+):
+    if not records:
+        return
+
+    with open(
+        LIVE_EMBEDDINGS_FILE,
+        "a",
+        encoding="utf-8"
+    ) as file:
+        for record in records:
+            file.write(
+                json.dumps(
+                    record,
+                    ensure_ascii=False
+                )
+            )
+
+            file.write("\n")
+
+
+class IncrementalEpisodeTracker:
+    def __init__(
+        self,
+        next_episode_id,
+        previous_messages=None
+    ):
+        self.next_episode_id = (
+            next_episode_id
+        )
+
+        self.recent_context = deque(
+            previous_messages or [],
+            maxlen=PREVIOUS_CONTEXT_LIMIT
+        )
+
+        self.previous_context = []
+        self.incoming = []
+        self.response = []
+
+
+    def remove_message_ids(
+        self,
+        message_ids
+    ):
+        message_ids = set(
+            message_ids
+        )
+
+        self.recent_context = deque(
+            [
+                message
+                for message
+                in self.recent_context
+                if message.get(
+                    "message_id"
+                ) not in message_ids
+            ],
+            maxlen=
+                PREVIOUS_CONTEXT_LIMIT
+        )
+
+        self.previous_context = [
+            message
+            for message
+            in self.previous_context
+            if message.get(
+                "message_id"
+            ) not in message_ids
+        ]
+
+        self.incoming = [
+            message
+            for message
+            in self.incoming
+            if message.get(
+                "message_id"
+            ) not in message_ids
+        ]
+
+        self.response = [
+            message
+            for message
+            in self.response
+            if message.get(
+                "message_id"
+            ) not in message_ids
+        ]
+
+
+    def build_episode(self):
+        if (
+            not self.incoming
+            or not self.response
+        ):
+            return None
+
+        episode = {
+            "episode_id":
+                self.next_episode_id,
+
+            "previous_context":
+                list(
+                    self.previous_context
+                ),
+
+            "incoming":
+                list(
+                    self.incoming
+                ),
+
+            "response":
+                list(
+                    self.response
+                ),
+
+            "metadata": {
+                "incoming_message_count":
+                    len(self.incoming),
+
+                "response_message_count":
+                    len(self.response),
+
+                "incoming_started_at":
+                    self.incoming[0].get(
+                        "date"
+                    ),
+
+                "incoming_ended_at":
+                    self.incoming[-1].get(
+                        "date"
+                    ),
+
+                "response_started_at":
+                    self.response[0].get(
+                        "date"
+                    ),
+
+                "response_ended_at":
+                    self.response[-1].get(
+                        "date"
+                    ),
+
+                "response_delay_seconds":
+                    calculate_response_delay(
+                        self.incoming,
+                        self.response
+                    )
+            }
+        }
+
+        self.next_episode_id += 1
+
+        return episode
+
+    def reset_current_episode(self):
+        self.previous_context = []
+        self.incoming = []
+        self.response = []
+
+    def process_message(
+        self,
+        message
+    ):
+        sender = message.get(
+            "sender"
+        )
+
+        completed_episode = None
+
+        # Пришло новое сообщение.
+        if sender != "Я":
+
+            # Если перед этим уже был
+            # блок ответов пользователя,
+            # предыдущий эпизод завершён.
+            if (
+                self.incoming
+                and self.response
+            ):
+                completed_episode = (
+                    self.build_episode()
+                )
+
+                self.reset_current_episode()
+
+            # Начинается новый incoming.
+            if not self.incoming:
+                self.previous_context = list(
+                    self.recent_context
+                )
+
+            self.incoming.append(
+                message
+            )
+
+        else:
+            # Ответ пользователя относится
+            # только к существующему incoming.
+            if self.incoming:
+                self.response.append(
+                    message
+                )
+
+        self.recent_context.append(
+            message
+        )
+
+        return completed_episode
+
+
+def find_history_start(
+    messages,
+    last_processed_message_id
+):
+    if not last_processed_message_id:
+        return 0
+
+    for index, message in enumerate(
+        messages
+    ):
+        if (
+            message.get("message_id")
+            == last_processed_message_id
+        ):
+            return index + 1
+
+    return 0
+
+
+async def initialize_episode_tracker():
+    last_episode_id, last_message_id = (
+        get_last_episode_info()
+    )
+
+    all_messages = load_all_messages(
+        Config.CHAT_HISTORY_JSONL
+    )
+
+    start_index = find_history_start(
+        all_messages,
+        last_message_id
+    )
+
+    context_start = max(
+        0,
+        start_index
+        - PREVIOUS_CONTEXT_LIMIT
+    )
+
+    previous_messages = (
+        all_messages[
+            context_start:start_index
+        ]
+    )
+
+    tracker = IncrementalEpisodeTracker(
+        next_episode_id=
+            last_episode_id + 1,
+        previous_messages=
+            previous_messages
+    )
+
+    new_episodes = []
+
+    for message in all_messages[
+        start_index:
+    ]:
+        episode = (
+            tracker.process_message(
+                message
+            )
+        )
+
+        if episode:
+            append_episode(
+                episode
+            )
+
+            new_episodes.append(
+                episode
+            )
+
+    if new_episodes:
+        embedding_records = (
+            await create_embeddings(
+                new_episodes
+            )
+        )
+
+        append_embedding_records(
+            embedding_records
+        )
+
+    return (
+        tracker,
+        new_episodes
+    )
+
+
+async def process_live_episode_message(
+    tracker,
+    message
+):
+    episode = tracker.process_message(
+        message
+    )
+
+    if not episode:
+        return None
+
+    append_episode(
+        episode
+    )
+
+    embedding_records = (
+        await create_embeddings(
+            [episode]
+        )
+    )
+
+    append_embedding_records(
+        embedding_records
+    )
+
+    return episode
