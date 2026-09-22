@@ -1,16 +1,15 @@
 import asyncio
 from telethon import events
-from telegram import Update
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    ContextTypes,
-    MessageHandler,
-    filters
-)
 from mybot.storage.workspace import create_workspace
 from mybot.config import Config
 from mybot.telegram.dialogs import choose_dialog
+from mybot.app.session_state import (
+    SessionState
+)
+
+from mybot.telegram.bot_interface import (
+    BotInterface
+)
 from mybot.telegram.exporter import (
     append_message_data,
     append_messages_data,
@@ -58,7 +57,7 @@ def display_message(message):
 
 
 async def main():
-    current_mood = None
+    state = SessionState()
     message_processing_lock = (
         asyncio.Lock()
     )
@@ -225,6 +224,13 @@ async def main():
         memory=memory
     )
 
+    bot_interface = BotInterface(
+        owner_id=me.id,
+        recent_messages=recent_messages,
+        reply_service=reply_service,
+        state=state
+    )
+
     print(
         "\nПроверяю новые эпизоды..."
     )
@@ -250,351 +256,7 @@ async def main():
             "эпизодов нет."
         )
 
-
-    def format_messages_for_bot(
-        messages
-    ):
-        lines = []
-
-        for message in messages:
-            sender = message.get(
-                "sender",
-                "?"
-            )
-
-            text = message.get(
-                "text"
-            )
-
-            if not text:
-                message_type = (
-                    message.get(
-                        "type",
-                        "unknown"
-                    )
-                )
-
-                text = (
-                    f"[{message_type}]"
-                )
-
-            lines.append(
-                f"{sender}: {text}"
-            )
-
-        return "\n\n".join(
-            lines
-        )
-
-    def is_owner(update):
-        user = update.effective_user
-        chat = update.effective_chat
-
-        if not user or not chat:
-            return False
-
-        return (
-            user.id == me.id
-            and chat.id == me.id
-            and chat.type == "private"
-        )
-
-
-    async def bot_start(
-        update: Update,
-        context: ContextTypes.DEFAULT_TYPE
-    ):
-        if not is_owner(update):
-            return
-
-        await update.message.reply_text(
-            "AI Agent запущен.\n\n"
-            "/reply — предложить ответ\n"
-            "/show — текущий диалог\n"
-            "/mood — текущее настроение\n"
-            "/mood <текст> — задать настроение\n"
-            "/clear_mood — сбросить настроение\n"
-            "/update_memory — обновить память\n\n"
-            "Также можешь просто написать мне "
-            "обычным сообщением, что именно "
-            "нужно сказать собеседнику."
-        )
-
-    async def send_long_text(
-        message,
-        text,
-        chunk_size=3000
-    ):
-        for start in range(
-            0,
-            len(text),
-            chunk_size
-        ):
-            await message.reply_text(
-                text[
-                    start:
-                    start + chunk_size
-                ]
-            )
-
-    async def bot_show(
-        update: Update,
-        context: ContextTypes.DEFAULT_TYPE
-    ):
-        if not is_owner(update):
-            return
-
-        text = format_messages_for_bot(
-            recent_messages
-        )
-
-        if not text:
-            text = "Контекст пуст."
-
-        await send_long_text(
-            update.message,
-            text
-        )
-
-
-    async def bot_mood(
-        update: Update,
-        context: ContextTypes.DEFAULT_TYPE
-    ):
-        nonlocal current_mood
-
-        if not is_owner(update):
-            return
-
-        if context.args:
-            current_mood = " ".join(
-                context.args
-            ).strip()
-
-            await update.message.reply_text(
-                "Настроение установлено:\n\n"
-                f"{current_mood}"
-            )
-
-            return
-
-        if current_mood:
-            await update.message.reply_text(
-                "Текущее настроение:\n\n"
-                f"{current_mood}"
-            )
-        else:
-            await update.message.reply_text(
-                "Настроение не задано."
-            )
-
-
-    async def bot_clear_mood(
-        update: Update,
-        context: ContextTypes.DEFAULT_TYPE
-    ):
-        nonlocal current_mood
-
-        if not is_owner(update):
-            return
-
-        current_mood = None
-
-        await update.message.reply_text(
-            "Настроение сброшено."
-        )
-
-
-    async def send_generated_answers(
-        update,
-        instruction=None
-    ):
-        if not is_owner(update):
-            return
-
-        status_message = (
-            await update.message.reply_text(
-                "Генерирую ответ..."
-            )
-        )
-
-        try:
-            answers = (
-                await reply_service.generate(
-                    instruction=instruction,
-                    current_mood=current_mood
-                )
-            )
-
-        except Exception as error:
-            await status_message.edit_text(
-                f"Ошибка генерации:\n{error}"
-            )
-
-            return
-
-        await status_message.edit_text(
-            "3 варианта:"
-        )
-
-        variants = (
-            reply_service.split_variants(
-                answers
-            )
-        )
-
-        for variant in variants:
-            await send_long_text(
-                update.message,
-                variant
-            )
-
-
-    async def bot_reply(
-        update: Update,
-        context: ContextTypes.DEFAULT_TYPE
-    ):
-        instruction = None
-
-        if context.args:
-            instruction = " ".join(
-                context.args
-            )
-
-        await send_generated_answers(
-            update,
-            instruction
-        )
-
-
-    async def bot_text_instruction(
-        update: Update,
-        context: ContextTypes.DEFAULT_TYPE
-    ):
-        if not is_owner(update):
-            return
-
-        instruction = (
-            update.message.text.strip()
-        )
-
-        await send_generated_answers(
-            update,
-            instruction
-        )
-
-
-    async def bot_update_memory(
-        update: Update,
-        context: ContextTypes.DEFAULT_TYPE
-    ):
-        if not is_owner(update):
-            return
-
-        message = (
-            await update.message.reply_text(
-                "Обновляю память..."
-            )
-        )
-
-        try:
-            result = (
-                await update_incremental_memory()
-            )
-
-        except Exception as error:
-            await message.edit_text(
-                "Ошибка обновления памяти:\n"
-                f"{error}"
-            )
-
-            return
-
-        await message.edit_text(
-            "Память обновлена.\n\n"
-            f"Новых сообщений: "
-            f'{result["messages"]}\n'
-            f"Новых memories: "
-            f'{result["memories"]}'
-        )
-
-    if not Config.AGENT_BOT_TOKEN:
-        raise ValueError(
-            "В .env отсутствует "
-            "AGENT_BOT_TOKEN"
-        )
-
-    bot_application = (
-        Application.builder()
-        .token(
-            Config.AGENT_BOT_TOKEN
-        )
-        .connect_timeout(30)
-        .read_timeout(30)
-        .write_timeout(30)
-        .get_updates_connect_timeout(30)
-        .get_updates_read_timeout(30)
-        .build()
-    )
-
-    bot_application.add_handler(
-        CommandHandler(
-            "start",
-            bot_start
-        )
-    )
-
-    bot_application.add_handler(
-        CommandHandler(
-            "show",
-            bot_show
-        )
-    )
-
-    bot_application.add_handler(
-        CommandHandler(
-            "reply",
-            bot_reply
-        )
-    )
-
-    bot_application.add_handler(
-        CommandHandler(
-            "mood",
-            bot_mood
-        )
-    )
-
-    bot_application.add_handler(
-        CommandHandler(
-            "clear_mood",
-            bot_clear_mood
-        )
-    )
-
-    bot_application.add_handler(
-        CommandHandler(
-            "update_memory",
-            bot_update_memory
-        )
-    )
-
-    bot_application.add_handler(
-        MessageHandler(
-            filters.TEXT
-            & ~filters.COMMAND,
-            bot_text_instruction
-        )
-    )
-
-    await bot_application.initialize()
-    await bot_application.updater.start_polling()
-    await bot_application.start()
-
-    print(
-        "\nTelegram-интерфейс "
-        "агента запущен."
-    )
+    await bot_interface.start()
 
     async def on_message_deleted(event):
         deleted_ids = set(
@@ -780,42 +442,13 @@ async def main():
                 != "Я"
             ):
                 try:
-                    text = new_message.get(
-                        "text"
+                    await (
+                        bot_interface
+                        .send_incoming_message(
+                            dialog_name,
+                            new_message
+                        )
                     )
-
-                    if not text:
-                        message_type = (
-                            new_message.get(
-                                "type",
-                                "unknown"
-                            )
-                        )
-
-                        text = (
-                            f"[{message_type}]"
-                        )
-
-                    bot_text = (
-                        f"{dialog_name}:\n{text}"
-                    )
-
-                    for start in range(
-                        0,
-                        len(bot_text),
-                        3000
-                    ):
-                        await (
-                            bot_application
-                            .bot
-                            .send_message(
-                                chat_id=me.id,
-                                text=bot_text[
-                                    start:
-                                    start + 3000
-                                ]
-                            )
-                        )
 
                 except Exception as error:
                     print(
@@ -981,11 +614,11 @@ async def main():
             continue
 
         if command == "/mood":
-            if current_mood:
+            if state.current_mood:
                 print(
                     "\nТекущее настроение:"
                 )
-                print(current_mood)
+                print(state.current_mood)
             else:
                 print(
                     "\nНастроение не задано."
@@ -995,7 +628,7 @@ async def main():
 
 
         if command.startswith("/mood "):
-            current_mood = (
+            state.current_mood = (
                 command[
                     len("/mood "):
                 ].strip()
@@ -1004,13 +637,13 @@ async def main():
             print(
                 "\nНастроение установлено:"
             )
-            print(current_mood)
+            print(state.current_mood)
 
             continue
 
 
         if command == "/clear_mood":
-            current_mood = None
+            state.current_mood = None
 
             print(
                 "\nНастроение сброшено."
@@ -1057,7 +690,7 @@ async def main():
                     instruction=
                         user_instruction,
                     current_mood=
-                        current_mood
+                        state.current_mood
                 )
             )
 
@@ -1076,18 +709,7 @@ async def main():
             answers
         )
 
-    print(
-        "\nОстанавливаю Telegram-бота..."
-    )
-
-    await bot_application.updater.stop()
-    await bot_application.stop()
-    await bot_application.shutdown()
-
-    print(
-        "Telegram-бот остановлен."
-    )
-
+    await bot_interface.stop()
 
 with client:
     client.loop.run_until_complete(
