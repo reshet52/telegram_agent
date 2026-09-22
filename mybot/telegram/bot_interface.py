@@ -17,7 +17,13 @@ from mybot.memory.incremental import (
 from mybot.services.reply_service import (
     ReplyService
 )
-
+from mybot.telegram.dialogs import (
+    get_dialogs,
+    format_dialogs
+)
+from mybot.services.agent_manager import (
+    AgentManager
+)
 
 class BotInterface:
     def __init__(
@@ -26,7 +32,8 @@ class BotInterface:
         recent_messages,
         reply_service: ReplyService,
         state: SessionState,
-        workspace=None
+        workspace=None,
+        telegram_client=None
     ):
         self.owner_id = owner_id
         self.recent_messages = (
@@ -37,6 +44,17 @@ class BotInterface:
         )
         self.state = state
         self.workspace = workspace
+
+        self.telegram_client = (
+            telegram_client
+        )
+        self.agent_manager = (
+            AgentManager(
+                telegram_client
+            )
+            if telegram_client
+            else None
+        )
 
         self.application = None
 
@@ -126,6 +144,8 @@ class BotInterface:
 
         await update.message.reply_text(
             "AI Agent запущен.\n\n"
+            "/dialogs — список диалогов\n"
+            "/select <ID> — выбрать диалог\n"
             "/reply — предложить ответ\n"
             "/show — текущий диалог\n"
             "/mood — текущее настроение\n"
@@ -135,6 +155,86 @@ class BotInterface:
             "Также можешь просто написать мне "
             "обычным сообщением, что именно "
             "нужно сказать собеседнику."
+        )
+
+    async def select_dialog_command(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE
+    ):
+        if not self.is_owner(
+            update
+        ):
+            return
+
+        if self.agent_manager is None:
+            await update.message.reply_text(
+                "AgentManager недоступен."
+            )
+
+            return
+
+        if not context.args:
+            await update.message.reply_text(
+                "Укажи ID диалога.\n\n"
+                "Например:\n"
+                "/select 5001521253"
+            )
+
+            return
+
+        try:
+            dialog_id = int(
+                context.args[0]
+            )
+
+        except ValueError:
+            await update.message.reply_text(
+                "Dialog ID должен быть числом."
+            )
+
+            return
+
+        message = (
+            await update.message.reply_text(
+                "Ищу диалог..."
+            )
+        )
+
+        try:
+            dialog = (
+                await self.agent_manager
+                .select_dialog(
+                    dialog_id
+                )
+            )
+
+        except Exception as error:
+            await message.edit_text(
+                "Ошибка получения диалога:\n"
+                f"{error}"
+            )
+
+            return
+
+        if dialog is None:
+            await message.edit_text(
+                "Диалог с таким ID "
+                "не найден."
+            )
+
+            return
+
+        dialog_name = (
+            dialog.name
+            or f"Dialog {dialog.id}"
+        )
+
+        await message.edit_text(
+            "Диалог выбран.\n\n"
+            f"Имя: {dialog_name}\n"
+            f"ID: {dialog.id}\n\n"
+            "Workspace пока не переключён."
         )
 
 
@@ -154,6 +254,59 @@ class BotInterface:
 
         if not text:
             text = "Контекст пуст."
+
+        await self.send_long_text(
+            update.message,
+            text
+        )
+
+    async def dialogs_command(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE
+    ):
+        if not self.is_owner(
+            update
+        ):
+            return
+
+        if self.telegram_client is None:
+            await update.message.reply_text(
+                "Telegram-клиент "
+                "недоступен."
+            )
+
+            return
+
+        status_message = (
+            await update.message.reply_text(
+                "Загружаю список "
+                "диалогов..."
+            )
+        )
+
+        try:
+            dialogs = await get_dialogs(
+                self.telegram_client
+            )
+
+        except Exception as error:
+            await status_message.edit_text(
+                "Не удалось получить "
+                "диалоги:\n"
+                f"{error}"
+            )
+
+            return
+
+        await status_message.delete()
+
+        text = (
+            "Доступные диалоги:\n\n"
+            + format_dialogs(
+                dialogs
+            )
+        )
 
         await self.send_long_text(
             update.message,
@@ -425,6 +578,20 @@ class BotInterface:
             CommandHandler(
                 "start",
                 self.start_command
+            )
+        )
+
+        self.application.add_handler(
+            CommandHandler(
+                "dialogs",
+                self.dialogs_command
+            )
+        )
+
+        self.application.add_handler(
+            CommandHandler(
+                "select",
+                self.select_dialog_command
             )
         )
 

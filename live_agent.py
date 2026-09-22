@@ -47,6 +47,9 @@ async def main():
         )
     )
 
+    if runtime is None:
+        return
+
     live_events = LiveEvents(
         client=client,
         selected_dialog=

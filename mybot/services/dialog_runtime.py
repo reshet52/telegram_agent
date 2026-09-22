@@ -43,6 +43,89 @@ class DialogRuntime:
     episode_tracker: object
 
 
+async def confirm_new_workspace(
+    client,
+    selected_dialog,
+    workspace
+):
+    history_exists = (
+        workspace.chat_history.exists()
+        and workspace.chat_history.stat().st_size > 0
+    )
+
+    if history_exists:
+        return True
+
+    print(
+        "\nЭто новый workspace."
+    )
+
+    print(
+        "Проверяю размер истории "
+        "диалога в Telegram..."
+    )
+
+    history_info = (
+        await client.get_messages(
+            selected_dialog.id,
+            limit=0
+        )
+    )
+
+    total_messages = (
+        history_info.total
+        or 0
+    )
+
+    print(
+        f"\nСообщений в диалоге: "
+        f"{total_messages}"
+    )
+
+    print(
+        "\nПри первом запуске:"
+    )
+
+    print(
+        "- будет загружена история "
+        "этого диалога;"
+    )
+
+    print(
+        "- будут построены episodes;"
+    )
+
+    print(
+        "- будут созданы embeddings "
+        "для новых episodes."
+    )
+
+    confirmation = input(
+        "\nИнициализировать диалог? "
+        "[y/N]: "
+    )
+
+    confirmation = (
+        confirmation
+        .strip()
+        .lower()
+    )
+
+    if confirmation not in {
+        "y",
+        "yes",
+        "д",
+        "да"
+    }:
+        print(
+            "\nИнициализация отменена."
+        )
+
+        return False
+
+    return True
+
+
 async def prepare_dialog_runtime(
     client,
     selected_dialog,
@@ -73,6 +156,18 @@ async def prepare_dialog_runtime(
         f"\nВыбран диалог: "
         f"{dialog_name}"
     )
+
+    should_continue = (
+        await confirm_new_workspace(
+            client=client,
+            selected_dialog=
+                selected_dialog,
+            workspace=workspace
+        )
+    )
+
+    if not should_continue:
+        return None
 
     last_saved_message_id = (
         get_last_saved_message_id(
@@ -213,7 +308,8 @@ async def prepare_dialog_runtime(
         reply_service=
             reply_service,
         state=state,
-        workspace=workspace
+        workspace=workspace,
+        telegram_client=client
     )
 
     print(
