@@ -36,6 +36,9 @@ from mybot.telegram.client import client
 from mybot.services.reply_service import (
     ReplyService
 )
+from mybot.storage.dialog_guard import (
+    validate_legacy_dialog
+)
 
 
 RECENT_MESSAGES_LIMIT = 15
@@ -77,6 +80,46 @@ async def main():
     )
 
     me = await client.get_me()
+
+    (
+        dialog_is_safe,
+        legacy_dialog_ids
+    ) = validate_legacy_dialog(
+        me_id=me.id,
+        selected_dialog_id=
+            selected_dialog.id
+    )
+
+    if not dialog_is_safe:
+        print(
+            "\nОШИБКА БЕЗОПАСНОСТИ:"
+        )
+
+        print(
+            "Выбранный диалог не совпадает "
+            "с диалогом текущей локальной "
+            "истории."
+        )
+
+        print(
+            "\nВыбранный dialog ID:",
+            selected_dialog.id
+        )
+
+        print(
+            "Dialog ID в локальной базе:",
+            sorted(
+                legacy_dialog_ids
+            )
+        )
+
+        print(
+            "\nЗапуск остановлен до чтения "
+            "или изменения истории."
+        )
+
+        return
+
     workspace = create_workspace(
         account_id=me.id,
         dialog_id=selected_dialog.id,

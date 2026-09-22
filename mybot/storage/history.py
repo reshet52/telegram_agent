@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from collections import deque
 
 from mybot.config import Config
@@ -10,7 +11,8 @@ from mybot.storage.deletions import (
 def load_last_messages(
     filename=Config.CHAT_HISTORY_JSONL,
     count=10,
-    include_deleted=False
+    include_deleted=False,
+    deleted_filename=None
 ):
     last_messages = deque(
         maxlen=count
@@ -22,8 +24,13 @@ def load_last_messages(
         deleted_ids = set()
     else:
         deleted_ids = (
-            load_deleted_message_ids()
+            load_deleted_message_ids(
+                deleted_filename
+            )
         )
+
+    if not Path(filename).exists():
+        return []
 
     with open(
         filename,
@@ -154,7 +161,8 @@ def print_messages(messages):
 
 def load_all_messages(
     filename=Config.CHAT_HISTORY_JSONL,
-    include_deleted=False
+    include_deleted=False,
+    deleted_filename=None
 ):
     messages = []
     message_lines = []
@@ -163,8 +171,13 @@ def load_all_messages(
         deleted_ids = set()
     else:
         deleted_ids = (
-            load_deleted_message_ids()
+            load_deleted_message_ids(
+                deleted_filename
+            )
         )
+
+    if not Path(filename).exists():
+        return []
 
     with open(
         filename,

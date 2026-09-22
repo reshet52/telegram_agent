@@ -1,5 +1,5 @@
 import json
-
+from pathlib import Path
 from mybot.config import Config
 
 
@@ -137,8 +137,17 @@ def append_message_data(
     message_data,
     filename=Config.CHAT_HISTORY_JSONL
 ):
+    file_path = Path(
+        filename
+    )
+
+    file_path.parent.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
     with open(
-        filename,
+        file_path,
         "a",
         encoding="utf-8"
     ) as file:
@@ -155,8 +164,17 @@ def append_messages_data(
     if not messages:
         return
 
+    file_path = Path(
+        filename
+    )
+
+    file_path.parent.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
     with open(
-        filename,
+        file_path,
         "a",
         encoding="utf-8"
     ) as file:
@@ -220,8 +238,17 @@ async def export_dialog(
         "сохранение истории..."
     )
 
+    file_path = Path(
+        filename
+    )
+
+    file_path.parent.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
     with open(
-        filename,
+        file_path,
         "w",
         encoding="utf-8"
     ) as file:

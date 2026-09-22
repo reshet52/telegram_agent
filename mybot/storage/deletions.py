@@ -4,7 +4,7 @@ from pathlib import Path
 from telethon.errors import MessageIdInvalidError
 
 
-DELETED_MESSAGES_FILE = Path(
+DEFAULT_DELETED_MESSAGES_FILE = Path(
     "exports/deleted_message_ids.json"
 )
 
@@ -12,12 +12,29 @@ RECONCILE_MESSAGES_LIMIT = 200
 CHECK_BATCH_SIZE = 100
 
 
-def load_deleted_message_ids():
-    if not DELETED_MESSAGES_FILE.exists():
+def resolve_deleted_file(
+    filename=None
+):
+    if filename is None:
+        return DEFAULT_DELETED_MESSAGES_FILE
+
+    return Path(filename)
+
+
+def load_deleted_message_ids(
+    filename=None
+):
+    deleted_file = (
+        resolve_deleted_file(
+            filename
+        )
+    )
+
+    if not deleted_file.exists():
         return set()
 
     with open(
-        DELETED_MESSAGES_FILE,
+        deleted_file,
         "r",
         encoding="utf-8"
     ) as file:
@@ -33,10 +50,22 @@ def load_deleted_message_ids():
 
 
 def save_deleted_message_ids(
-    message_ids
+    message_ids,
+    filename=None
 ):
+    deleted_file = (
+        resolve_deleted_file(
+            filename
+        )
+    )
+
+    deleted_file.parent.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
     with open(
-        DELETED_MESSAGES_FILE,
+        deleted_file,
         "w",
         encoding="utf-8"
     ) as file:
@@ -49,10 +78,13 @@ def save_deleted_message_ids(
 
 
 def mark_messages_deleted(
-    message_ids
+    message_ids,
+    filename=None
 ):
     deleted_ids = (
-        load_deleted_message_ids()
+        load_deleted_message_ids(
+            filename
+        )
     )
 
     new_deleted_ids = set()
@@ -78,7 +110,8 @@ def mark_messages_deleted(
 
     if new_deleted_ids:
         save_deleted_message_ids(
-            deleted_ids
+            deleted_ids,
+            filename
         )
 
     return new_deleted_ids
@@ -88,7 +121,8 @@ async def check_recent_deletions(
     client,
     dialog_id,
     messages,
-    limit=RECONCILE_MESSAGES_LIMIT
+    limit=RECONCILE_MESSAGES_LIMIT,
+    deleted_filename=None
 ):
     recent_messages = messages[
         -limit:
@@ -103,7 +137,9 @@ async def check_recent_deletions(
     ]
 
     already_deleted = (
-        load_deleted_message_ids()
+        load_deleted_message_ids(
+            deleted_filename
+        )
     )
 
     message_ids = [
