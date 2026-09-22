@@ -12,15 +12,15 @@ from mybot.storage.deletions import (
 from mybot.config import Config
 
 
-EPISODES_FILE = Path(
+DEFAULT_EPISODES_FILE = Path(
     "memory/episodes.jsonl"
 )
 
-BASE_EMBEDDINGS_FILE = Path(
+DEFAULT_BASE_EMBEDDINGS_FILE = Path(
     "memory/episode_embeddings.json"
 )
 
-LIVE_EMBEDDINGS_FILE = Path(
+DEFAULT_LIVE_EMBEDDINGS_FILE = Path(
     "memory/episode_embeddings_live.jsonl"
 )
 
@@ -34,11 +34,20 @@ client = AsyncOpenAI(
 )
 
 
-def load_episodes():
+def load_episodes(
+    filename=DEFAULT_EPISODES_FILE
+):
+    file_path = Path(
+        filename
+    )
+
+    if not file_path.exists():
+        return {}
+
     episodes = {}
 
     with open(
-        EPISODES_FILE,
+        file_path,
         "r",
         encoding="utf-8"
     ) as file:
@@ -57,12 +66,19 @@ def load_episodes():
     return episodes
 
 
-def load_base_embeddings():
-    if not BASE_EMBEDDINGS_FILE.exists():
+def load_base_embeddings(
+    filename=
+        DEFAULT_BASE_EMBEDDINGS_FILE
+):
+    file_path = Path(
+        filename
+    )
+
+    if not file_path.exists():
         return []
 
     with open(
-        BASE_EMBEDDINGS_FILE,
+        file_path,
         "r",
         encoding="utf-8"
     ) as file:
@@ -76,14 +92,21 @@ def load_base_embeddings():
     )
 
 
-def load_live_embeddings():
-    if not LIVE_EMBEDDINGS_FILE.exists():
+def load_live_embeddings(
+    filename=
+        DEFAULT_LIVE_EMBEDDINGS_FILE
+):
+    file_path = Path(
+        filename
+    )
+
+    if not file_path.exists():
         return []
 
     embeddings = []
 
     with open(
-        LIVE_EMBEDDINGS_FILE,
+        file_path,
         "r",
         encoding="utf-8"
     ) as file:
@@ -102,20 +125,24 @@ def load_live_embeddings():
     return embeddings
 
 
-def load_embeddings():
+def load_embeddings(
+    base_filename=
+        DEFAULT_BASE_EMBEDDINGS_FILE,
+    live_filename=
+        DEFAULT_LIVE_EMBEDDINGS_FILE
+):
     base_embeddings = (
-        load_base_embeddings()
+        load_base_embeddings(
+            base_filename
+        )
     )
 
     live_embeddings = (
-        load_live_embeddings()
+        load_live_embeddings(
+            live_filename
+        )
     )
 
-    # episode_id используется как ключ.
-    # Поэтому даже если когда-нибудь
-    # один episode случайно окажется
-    # и в старом, и в live файле,
-    # дубликата в поиске не будет.
     merged = {}
 
     for item in base_embeddings:
@@ -370,7 +397,14 @@ async def find_similar_episodes(
     messages,
     top_k=TOP_K,
     min_similarity=
-        MIN_SIMILARITY
+        MIN_SIMILARITY,
+    episodes_filename=
+        DEFAULT_EPISODES_FILE,
+    base_embeddings_filename=
+        DEFAULT_BASE_EMBEDDINGS_FILE,
+    live_embeddings_filename=
+        DEFAULT_LIVE_EMBEDDINGS_FILE,
+    deleted_filename=None
 ):
     query_text = (
         build_episode_query(
@@ -381,11 +415,29 @@ async def find_similar_episodes(
     if not query_text.strip():
         return []
 
-    episodes = load_episodes()
+    episodes = load_episodes(
+        episodes_filename
+    )
 
     embeddings_data = (
-        load_embeddings()
+        load_embeddings(
+            base_filename=
+                base_embeddings_filename,
+            live_filename=
+                live_embeddings_filename
+        )
     )
+
+    # Для нового пустого workspace
+    # нет смысла даже отправлять запрос
+    # в embeddings API.
+    if (
+        not episodes
+        or not embeddings_data[
+            "episodes"
+        ]
+    ):
+        return []
 
     query_embedding = (
         await create_query_embedding(
@@ -400,7 +452,9 @@ async def find_similar_episodes(
     )
 
     deleted_message_ids = (
-        load_deleted_message_ids()
+        load_deleted_message_ids(
+            deleted_filename
+        )
     )
 
     excluded_message_ids.update(

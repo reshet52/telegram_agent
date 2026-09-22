@@ -1,19 +1,22 @@
 import json
 from collections import deque
 from datetime import datetime
+from pathlib import Path
 
 from mybot.ai.client import ai_client
 from mybot.config import Config
 from mybot.storage.history import load_all_messages
 
 
-EPISODES_FILE = "memory/episodes.jsonl"
+DEFAULT_EPISODES_FILE = Path(
+    "memory/episodes.jsonl"
+)
 
-# Новые embeddings будем хранить отдельно.
-# Старый большой файл не переписываем.
-LIVE_EMBEDDINGS_FILE = (
+DEFAULT_LIVE_EMBEDDINGS_FILE = Path(
     "memory/episode_embeddings_live.jsonl"
 )
+
+EMBEDDING_BATCH_SIZE = 256
 
 PREVIOUS_CONTEXT_LIMIT = 20
 
@@ -31,29 +34,40 @@ def message_to_text(message):
     return f"[{message_type.upper()}]"
 
 
-def load_last_episode():
+def load_last_episode(
+    filename=DEFAULT_EPISODES_FILE
+):
+    file_path = Path(
+        filename
+    )
+
+    if not file_path.exists():
+        return None
+
     last_episode = None
 
-    try:
-        with open(
-            EPISODES_FILE,
-            "r",
-            encoding="utf-8"
-        ) as file:
-            for line in file:
-                if line.strip():
-                    last_episode = json.loads(
-                        line
-                    )
-
-    except FileNotFoundError:
-        return None
+    with open(
+        file_path,
+        "r",
+        encoding="utf-8"
+    ) as file:
+        for line in file:
+            if line.strip():
+                last_episode = json.loads(
+                    line
+                )
 
     return last_episode
 
 
-def get_last_episode_info():
-    last_episode = load_last_episode()
+def get_last_episode_info(
+    filename=DEFAULT_EPISODES_FILE
+):
+    last_episode = (
+        load_last_episode(
+            filename
+        )
+    )
 
     if not last_episode:
         return 0, 0
@@ -85,9 +99,21 @@ def get_last_episode_info():
     )
 
 
-def append_episode(episode):
+def append_episode(
+    episode,
+    filename=DEFAULT_EPISODES_FILE
+):
+    file_path = Path(
+        filename
+    )
+
+    file_path.parent.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
     with open(
-        EPISODES_FILE,
+        file_path,
         "a",
         encoding="utf-8"
     ) as file:
@@ -157,49 +183,72 @@ def build_embedding_text(episode):
 
 
 async def create_embeddings(
-    episodes
+    episodes,
+    batch_size=EMBEDDING_BATCH_SIZE
 ):
     if not episodes:
         return []
 
-    texts = [
-        build_embedding_text(
-            episode
-        )
-        for episode in episodes
-    ]
-
-    response = (
-        await ai_client.embeddings.create(
-            model=Config.EMBEDDING_MODEL,
-            input=texts
-        )
-    )
-
     results = []
 
-    for episode, item in zip(
-        episodes,
-        response.data
+    for start in range(
+        0,
+        len(episodes),
+        batch_size
     ):
-        results.append({
-            "episode_id":
-                episode["episode_id"],
-            "embedding":
-                item.embedding
-        })
+        batch = episodes[
+            start:
+            start + batch_size
+        ]
+
+        texts = [
+            build_embedding_text(
+                episode
+            )
+            for episode in batch
+        ]
+
+        response = (
+            await ai_client.embeddings.create(
+                model=
+                    Config.EMBEDDING_MODEL,
+                input=texts
+            )
+        )
+
+        for episode, item in zip(
+            batch,
+            response.data
+        ):
+            results.append({
+                "episode_id":
+                    episode["episode_id"],
+                "embedding":
+                    item.embedding
+            })
 
     return results
 
 
 def append_embedding_records(
-    records
+    records,
+    filename=
+        DEFAULT_LIVE_EMBEDDINGS_FILE
 ):
     if not records:
         return
 
+    file_path = Path(
+        filename
+    )
+
+    file_path.parent.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
     with open(
-        LIVE_EMBEDDINGS_FILE,
+        file_path,
         "a",
         encoding="utf-8"
     ) as file:
@@ -420,16 +469,37 @@ def find_history_start(
         ):
             return index + 1
 
-    return 0
+    raise RuntimeError(
+        "Последний обработанный "
+        "message_id не найден "
+        "в истории: "
+        f"{last_processed_message_id}. "
+        "История и episodes "
+        "рассинхронизированы. "
+        "Автоматическая пересборка "
+        "остановлена."
+    )
 
 
-async def initialize_episode_tracker():
+async def initialize_episode_tracker(
+    history_filename=
+        Config.CHAT_HISTORY_JSONL,
+    episodes_filename=
+        DEFAULT_EPISODES_FILE,
+    live_embeddings_filename=
+        DEFAULT_LIVE_EMBEDDINGS_FILE,
+    deleted_filename=None
+):
     last_episode_id, last_message_id = (
-        get_last_episode_info()
+        get_last_episode_info(
+            episodes_filename
+        )
     )
 
     all_messages = load_all_messages(
-        Config.CHAT_HISTORY_JSONL
+        filename=history_filename,
+        deleted_filename=
+            deleted_filename
     )
 
     start_index = find_history_start(
@@ -468,23 +538,29 @@ async def initialize_episode_tracker():
         )
 
         if episode:
-            append_episode(
-                episode
-            )
-
             new_episodes.append(
                 episode
             )
 
     if new_episodes:
+        # Сначала создаём embeddings.
+        # Пока API не завершился успешно,
+        # episodes на диск не записываем.
         embedding_records = (
             await create_embeddings(
                 new_episodes
             )
         )
 
+        for episode in new_episodes:
+            append_episode(
+                episode,
+                episodes_filename
+            )
+
         append_embedding_records(
-            embedding_records
+            embedding_records,
+            live_embeddings_filename
         )
 
     return (
@@ -495,7 +571,11 @@ async def initialize_episode_tracker():
 
 async def process_live_episode_message(
     tracker,
-    message
+    message,
+    episodes_filename=
+        DEFAULT_EPISODES_FILE,
+    live_embeddings_filename=
+        DEFAULT_LIVE_EMBEDDINGS_FILE
 ):
     episode = tracker.process_message(
         message
@@ -504,18 +584,25 @@ async def process_live_episode_message(
     if not episode:
         return None
 
-    append_episode(
-        episode
-    )
-
+    # Сначала embedding.
+    # Если API недоступен, сообщение всё
+    # равно уже находится в chat history,
+    # поэтому episode восстановится
+    # при следующем запуске.
     embedding_records = (
         await create_embeddings(
             [episode]
         )
     )
 
+    append_episode(
+        episode,
+        episodes_filename
+    )
+
     append_embedding_records(
-        embedding_records
+        embedding_records,
+        live_embeddings_filename
     )
 
     return episode
