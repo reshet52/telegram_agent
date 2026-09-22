@@ -9,11 +9,11 @@ from mybot.config import Config
 from mybot.storage.history import load_last_messages
 
 
-BASE_EMBEDDINGS_FILE = Path(
+DEFAULT_BASE_EMBEDDINGS_FILE = Path(
     "memory/memory_embeddings.json"
 )
 
-LIVE_EMBEDDINGS_FILE = Path(
+DEFAULT_LIVE_EMBEDDINGS_FILE = Path(
     "memory/memory_embeddings_live.jsonl"
 )
 
@@ -27,46 +27,64 @@ client = AsyncOpenAI(
 )
 
 
-def load_base_embeddings():
-    if not BASE_EMBEDDINGS_FILE.exists():
+def load_base_embeddings(
+    filename=
+        DEFAULT_BASE_EMBEDDINGS_FILE
+):
+    file_path = Path(
+        filename
+    )
+
+    if not file_path.exists():
         return []
 
     with open(
-        BASE_EMBEDDINGS_FILE,
+        file_path,
         "r",
         encoding="utf-8"
     ) as file:
         data = json.load(file)
 
-    # если файл хранится просто как список
     if isinstance(data, list):
         return data
 
-    # если файл хранится как dict с ключом items
     if isinstance(data, dict):
-        if "items" in data and isinstance(
-            data["items"],
-            list
+        if (
+            "items" in data
+            and isinstance(
+                data["items"],
+                list
+            )
         ):
             return data["items"]
 
-        if "memories" in data and isinstance(
-            data["memories"],
-            list
+        if (
+            "memories" in data
+            and isinstance(
+                data["memories"],
+                list
+            )
         ):
             return data["memories"]
 
     return []
 
 
-def load_live_embeddings():
-    if not LIVE_EMBEDDINGS_FILE.exists():
+def load_live_embeddings(
+    filename=
+        DEFAULT_LIVE_EMBEDDINGS_FILE
+):
+    file_path = Path(
+        filename
+    )
+
+    if not file_path.exists():
         return []
 
     items = []
 
     with open(
-        LIVE_EMBEDDINGS_FILE,
+        file_path,
         "r",
         encoding="utf-8"
     ) as file:
@@ -81,25 +99,45 @@ def load_live_embeddings():
     return items
 
 
-def load_all_embeddings():
-    base_items = load_base_embeddings()
-    live_items = load_live_embeddings()
+def load_all_embeddings(
+    base_filename=
+        DEFAULT_BASE_EMBEDDINGS_FILE,
+    live_filename=
+        DEFAULT_LIVE_EMBEDDINGS_FILE
+):
+    base_items = (
+        load_base_embeddings(
+            base_filename
+        )
+    )
+
+    live_items = (
+        load_live_embeddings(
+            live_filename
+        )
+    )
 
     print("\nБаза памяти:")
+
     print(
         f"Старых embeddings: "
         f"{len(base_items)}"
     )
+
     print(
         f"Live embeddings: "
         f"{len(live_items)}"
     )
+
     print(
         f"Всего для поиска: "
         f"{len(base_items) + len(live_items)}"
     )
 
-    return base_items + live_items
+    return (
+        base_items
+        + live_items
+    )
 
 
 def message_to_text(message):
@@ -261,7 +299,12 @@ def search_memories(
 async def find_relevant_memories(
     messages,
     top_k=TOP_K,
-    min_similarity=MIN_SIMILARITY
+    min_similarity=
+        MIN_SIMILARITY,
+    base_embeddings_filename=
+        DEFAULT_BASE_EMBEDDINGS_FILE,
+    live_embeddings_filename=
+        DEFAULT_LIVE_EMBEDDINGS_FILE
 ):
     query_text = build_memory_query(
         messages
@@ -270,7 +313,14 @@ async def find_relevant_memories(
     if not query_text.strip():
         return []
 
-    embeddings_data = load_all_embeddings()
+    embeddings_data = (
+        load_all_embeddings(
+            base_filename=
+                base_embeddings_filename,
+            live_filename=
+                live_embeddings_filename
+        )
+    )
 
     if not embeddings_data:
         return []
@@ -282,10 +332,13 @@ async def find_relevant_memories(
     )
 
     return search_memories(
-        embeddings_data=embeddings_data,
-        query_embedding=query_embedding,
+        embeddings_data=
+            embeddings_data,
+        query_embedding=
+            query_embedding,
         top_k=top_k,
-        min_similarity=min_similarity
+        min_similarity=
+            min_similarity
     )
 
 

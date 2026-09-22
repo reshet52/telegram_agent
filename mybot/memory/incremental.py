@@ -13,43 +13,49 @@ from mybot.ai.style_analyzer import (
 )
 
 
-BASE_EPISODE_EMBEDDINGS = Path(
+DEFAULT_BASE_EPISODE_EMBEDDINGS = Path(
     "memory/episode_embeddings.json"
 )
 
-EPISODES_FILE = Path(
+DEFAULT_EPISODES_FILE = Path(
     "memory/episodes.jsonl"
 )
 
-LIVE_MEMORY_FILE = Path(
+DEFAULT_LIVE_MEMORY_FILE = Path(
     "memory/agent_memory_live.jsonl"
 )
 
-LIVE_MEMORY_EMBEDDINGS_FILE = Path(
+DEFAULT_LIVE_MEMORY_EMBEDDINGS_FILE = Path(
     "memory/memory_embeddings_live.jsonl"
 )
 
-STATE_FILE = Path(
+DEFAULT_STATE_FILE = Path(
     "memory/memory_update_state.json"
 )
 
 
-def get_initial_memory_message_id():
-    """
-    Определяем границу старой памяти.
+def get_initial_memory_message_id(
+    base_episode_embeddings_filename=
+        DEFAULT_BASE_EPISODE_EMBEDDINGS,
+    episodes_filename=
+        DEFAULT_EPISODES_FILE
+):
+    base_embeddings_path = Path(
+        base_episode_embeddings_filename
+    )
 
-    Основной episode_embeddings.json
-    был построен одновременно со старой
-    agent_memory, поэтому последний
-    episode из основной базы показывает
-    приблизительную границу старых данных.
-    """
+    episodes_path = Path(
+        episodes_filename
+    )
 
-    if not BASE_EPISODE_EMBEDDINGS.exists():
+    if (
+        not base_embeddings_path.exists()
+        or not episodes_path.exists()
+    ):
         return 0
 
     with open(
-        BASE_EPISODE_EMBEDDINGS,
+        base_embeddings_path,
         "r",
         encoding="utf-8"
     ) as file:
@@ -69,7 +75,7 @@ def get_initial_memory_message_id():
     )
 
     with open(
-        EPISODES_FILE,
+        episodes_path,
         "r",
         encoding="utf-8"
     ) as file:
@@ -118,17 +124,33 @@ def get_initial_memory_message_id():
     return 0
 
 
-def load_memory_state():
-    if STATE_FILE.exists():
+def load_memory_state(
+    state_filename=
+        DEFAULT_STATE_FILE,
+    base_episode_embeddings_filename=
+        DEFAULT_BASE_EPISODE_EMBEDDINGS,
+    episodes_filename=
+        DEFAULT_EPISODES_FILE
+):
+    state_path = Path(
+        state_filename
+    )
+
+    if state_path.exists():
         with open(
-            STATE_FILE,
+            state_path,
             "r",
             encoding="utf-8"
         ) as file:
             return json.load(file)
 
     initial_message_id = (
-        get_initial_memory_message_id()
+        get_initial_memory_message_id(
+            base_episode_embeddings_filename=
+                base_episode_embeddings_filename,
+            episodes_filename=
+                episodes_filename
+        )
     )
 
     state = {
@@ -137,15 +159,28 @@ def load_memory_state():
     }
 
     save_memory_state(
-        state
+        state,
+        state_filename
     )
 
     return state
 
 
-def save_memory_state(state):
+def save_memory_state(
+    state,
+    filename=DEFAULT_STATE_FILE
+):
+    file_path = Path(
+        filename
+    )
+
+    file_path.parent.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
     with open(
-        STATE_FILE,
+        file_path,
         "w",
         encoding="utf-8"
     ) as file:
@@ -158,10 +193,39 @@ def save_memory_state(state):
 
 
 def get_new_messages(
-    last_processed_message_id
+    last_processed_message_id,
+    history_filename=
+        Config.CHAT_HISTORY_JSONL,
+    deleted_filename=None
 ):
+    raw_messages = load_all_messages(
+        filename=history_filename,
+        include_deleted=True,
+        deleted_filename=
+            deleted_filename
+    )
+
+    if last_processed_message_id:
+        message_exists = any(
+            message.get("message_id")
+            == last_processed_message_id
+            for message in raw_messages
+        )
+
+        if not message_exists:
+            raise RuntimeError(
+                "Последний обработанный "
+                "memory message_id не найден "
+                "в истории: "
+                f"{last_processed_message_id}. "
+                "История и состояние памяти "
+                "рассинхронизированы."
+            )
+
     messages = load_all_messages(
-        Config.CHAT_HISTORY_JSONL
+        filename=history_filename,
+        deleted_filename=
+            deleted_filename
     )
 
     return [
@@ -177,12 +241,25 @@ def get_new_messages(
     ]
 
 
-def append_memories(memories):
+def append_memories(
+    memories,
+    filename=
+        DEFAULT_LIVE_MEMORY_FILE
+):
     if not memories:
         return
 
+    file_path = Path(
+        filename
+    )
+
+    file_path.parent.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
     with open(
-        LIVE_MEMORY_FILE,
+        file_path,
         "a",
         encoding="utf-8"
     ) as file:
@@ -255,13 +332,24 @@ async def create_memory_embeddings(
 
 
 def append_memory_embeddings(
-    records
+    records,
+    filename=
+        DEFAULT_LIVE_MEMORY_EMBEDDINGS_FILE
 ):
     if not records:
         return
 
+    file_path = Path(
+        filename
+    )
+
+    file_path.parent.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
     with open(
-        LIVE_MEMORY_EMBEDDINGS_FILE,
+        file_path,
         "a",
         encoding="utf-8"
     ) as file:
@@ -276,8 +364,29 @@ def append_memory_embeddings(
             file.write("\n")
 
 
-async def update_incremental_memory():
-    state = load_memory_state()
+async def update_incremental_memory(
+    history_filename=
+        Config.CHAT_HISTORY_JSONL,
+    deleted_filename=None,
+    base_episode_embeddings_filename=
+        DEFAULT_BASE_EPISODE_EMBEDDINGS,
+    episodes_filename=
+        DEFAULT_EPISODES_FILE,
+    live_memory_filename=
+        DEFAULT_LIVE_MEMORY_FILE,
+    live_memory_embeddings_filename=
+        DEFAULT_LIVE_MEMORY_EMBEDDINGS_FILE,
+    state_filename=
+        DEFAULT_STATE_FILE
+):
+    state = load_memory_state(
+        state_filename=
+            state_filename,
+        base_episode_embeddings_filename=
+            base_episode_embeddings_filename,
+        episodes_filename=
+            episodes_filename
+    )
 
     last_processed_message_id = (
         state.get(
@@ -287,7 +396,11 @@ async def update_incremental_memory():
     )
 
     new_messages = get_new_messages(
-        last_processed_message_id
+        last_processed_message_id,
+        history_filename=
+            history_filename,
+        deleted_filename=
+            deleted_filename
     )
 
     if not new_messages:
@@ -329,18 +442,23 @@ async def update_incremental_memory():
         )
 
     if memories:
-        append_memories(
-            memories
-        )
-
+        # Сначала создаём embeddings.
+        # Если OpenAI вернёт ошибку,
+        # на диск ничего ещё не записано.
         embeddings = (
             await create_memory_embeddings(
                 memories
             )
         )
 
+        append_memories(
+            memories,
+            live_memory_filename
+        )
+
         append_memory_embeddings(
-            embeddings
+            embeddings,
+            live_memory_embeddings_filename
         )
 
     newest_message_id = max(
@@ -356,7 +474,8 @@ async def update_incremental_memory():
     ] = newest_message_id
 
     save_memory_state(
-        state
+        state,
+        state_filename
     )
 
     return {

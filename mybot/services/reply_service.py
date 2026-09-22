@@ -1,6 +1,6 @@
 import asyncio
 import re
-
+from pathlib import Path
 from mybot.ai.client import generate_answers
 from mybot.ai.context_builder import (
     build_ai_request
@@ -19,13 +19,15 @@ class ReplyService:
     def __init__(
         self,
         recent_messages,
-        memory
+        memory,
+        workspace=None
     ):
         self.recent_messages = (
             recent_messages
         )
 
         self.memory = memory
+        self.workspace = workspace
 
         self.generation_lock = (
             asyncio.Lock()
@@ -90,12 +92,31 @@ class ReplyService:
                 await build_ai_request(
                     messages_snapshot,
                     instruction,
-                    self.memory
+                    self.memory,
+                    workspace=self.workspace
                 )
             )
 
+            if self.workspace is None:
+                preview_filename = (
+                    Config.AI_REQUEST_PREVIEW
+                )
+            else:
+                preview_filename = (
+                    self.workspace.ai_request_preview
+                )
+
+            preview_path = Path(
+                preview_filename
+            )
+
+            preview_path.parent.mkdir(
+                parents=True,
+                exist_ok=True
+            )
+
             with open(
-                Config.AI_REQUEST_PREVIEW,
+                preview_path,
                 "w",
                 encoding="utf-8"
             ) as file:

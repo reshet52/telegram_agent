@@ -25,7 +25,8 @@ class BotInterface:
         owner_id,
         recent_messages,
         reply_service: ReplyService,
-        state: SessionState
+        state: SessionState,
+        workspace=None
     ):
         self.owner_id = owner_id
         self.recent_messages = (
@@ -35,6 +36,7 @@ class BotInterface:
             reply_service
         )
         self.state = state
+        self.workspace = workspace
 
         self.application = None
 
@@ -316,9 +318,30 @@ class BotInterface:
         )
 
         try:
-            result = (
-                await update_incremental_memory()
-            )
+            if self.workspace is None:
+                result = (
+                    await update_incremental_memory()
+                )
+
+            else:
+                result = (
+                    await update_incremental_memory(
+                        history_filename=
+                            self.workspace.chat_history,
+                        deleted_filename=
+                            self.workspace.deleted_message_ids,
+                        base_episode_embeddings_filename=
+                            self.workspace.episode_embeddings,
+                        episodes_filename=
+                            self.workspace.episodes,
+                        live_memory_filename=
+                            self.workspace.agent_memory_live,
+                        live_memory_embeddings_filename=
+                            self.workspace.memory_embeddings_live,
+                        state_filename=
+                            self.workspace.memory_update_state
+                    )
+                )
 
         except Exception as error:
             await message.edit_text(

@@ -1,7 +1,6 @@
 import asyncio
 from telethon import events
 from mybot.storage.workspace import create_workspace
-from mybot.config import Config
 from mybot.telegram.dialogs import choose_dialog
 from mybot.app.session_state import (
     SessionState
@@ -35,9 +34,6 @@ from mybot.memory.manager import load_agent_memory
 from mybot.telegram.client import client
 from mybot.services.reply_service import (
     ReplyService
-)
-from mybot.storage.dialog_guard import (
-    validate_legacy_dialog
 )
 
 
@@ -81,45 +77,6 @@ async def main():
 
     me = await client.get_me()
 
-    (
-        dialog_is_safe,
-        legacy_dialog_ids
-    ) = validate_legacy_dialog(
-        me_id=me.id,
-        selected_dialog_id=
-            selected_dialog.id
-    )
-
-    if not dialog_is_safe:
-        print(
-            "\nОШИБКА БЕЗОПАСНОСТИ:"
-        )
-
-        print(
-            "Выбранный диалог не совпадает "
-            "с диалогом текущей локальной "
-            "истории."
-        )
-
-        print(
-            "\nВыбранный dialog ID:",
-            selected_dialog.id
-        )
-
-        print(
-            "Dialog ID в локальной базе:",
-            sorted(
-                legacy_dialog_ids
-            )
-        )
-
-        print(
-            "\nЗапуск остановлен до чтения "
-            "или изменения истории."
-        )
-
-        return
-
     workspace = create_workspace(
         account_id=me.id,
         dialog_id=selected_dialog.id,
@@ -146,7 +103,7 @@ async def main():
 
     last_saved_message_id = (
         get_last_saved_message_id(
-            Config.CHAT_HISTORY_JSONL
+            workspace.chat_history
         )
     )
 
@@ -183,7 +140,9 @@ async def main():
 
     if new_messages:
         append_messages_data(
-            new_messages
+            new_messages,
+            filename=
+                workspace.chat_history
         )
 
         print(
@@ -207,8 +166,11 @@ async def main():
     )
 
     raw_history = load_all_messages(
-        Config.CHAT_HISTORY_JSONL,
-        include_deleted=True
+        filename=
+            workspace.chat_history,
+        include_deleted=True,
+        deleted_filename=
+            workspace.deleted_message_ids
     )
 
     deleted_while_offline = (
@@ -216,13 +178,17 @@ async def main():
             client=client,
             dialog_id=
                 selected_dialog.id,
-            messages=raw_history
+            messages=raw_history,
+            deleted_filename=
+                workspace.deleted_message_ids
         )
     )
 
     newly_deleted = (
         mark_messages_deleted(
-            deleted_while_offline
+            deleted_while_offline,
+            filename=
+                workspace.deleted_message_ids
         )
     )
 
@@ -240,8 +206,10 @@ async def main():
     recent_messages = (
         load_last_messages(
             filename=
-                Config.CHAT_HISTORY_JSONL,
-            count=RECENT_MESSAGES_LIMIT
+                workspace.chat_history,
+            count=RECENT_MESSAGES_LIMIT,
+            deleted_filename=
+                workspace.deleted_message_ids
         )
     )
 
@@ -260,18 +228,25 @@ async def main():
         recent_messages
     )
 
-    memory = load_agent_memory()
+    memory = load_agent_memory(
+        user_profile_filename=
+            workspace.user_profile,
+        person_profile_filename=
+            workspace.person_profile
+    )
 
     reply_service = ReplyService(
         recent_messages=recent_messages,
-        memory=memory
+        memory=memory,
+        workspace=workspace
     )
 
     bot_interface = BotInterface(
         owner_id=me.id,
         recent_messages=recent_messages,
         reply_service=reply_service,
-        state=state
+        state=state,
+        workspace=workspace
     )
 
     print(
@@ -279,7 +254,16 @@ async def main():
     )
 
     episode_tracker, new_episodes = (
-        await initialize_episode_tracker()
+        await initialize_episode_tracker(
+            history_filename=
+                workspace.chat_history,
+            episodes_filename=
+                workspace.episodes,
+            live_embeddings_filename=
+                workspace.episode_embeddings_live,
+            deleted_filename=
+                workspace.deleted_message_ids
+        )
     )
 
     if new_episodes:
@@ -367,7 +351,9 @@ async def main():
 
         newly_deleted = (
             mark_messages_deleted(
-                confirmed_deleted_ids
+                confirmed_deleted_ids,
+                filename=
+                    workspace.deleted_message_ids
             )
         )
 
@@ -442,9 +428,10 @@ async def main():
                     message_id
                 )
 
-            # Сразу сохраняем на диск.
             append_message_data(
-                new_message
+                new_message,
+                filename=
+                    workspace.chat_history
             )
 
             # Сразу добавляем в текущий
@@ -511,7 +498,11 @@ async def main():
                     await
                     process_live_episode_message(
                         episode_tracker,
-                        new_message
+                        new_message,
+                        episodes_filename=
+                            workspace.episodes,
+                        live_embeddings_filename=
+                            workspace.episode_embeddings_live
                     )
                 )
 
@@ -633,7 +624,22 @@ async def main():
 
             try:
                 result = (
-                    await update_incremental_memory()
+                    await update_incremental_memory(
+                        history_filename=
+                            workspace.chat_history,
+                        deleted_filename=
+                            workspace.deleted_message_ids,
+                        base_episode_embeddings_filename=
+                            workspace.episode_embeddings,
+                        episodes_filename=
+                            workspace.episodes,
+                        live_memory_filename=
+                            workspace.agent_memory_live,
+                        live_memory_embeddings_filename=
+                            workspace.memory_embeddings_live,
+                        state_filename=
+                            workspace.memory_update_state
+                    )
                 )
 
             except Exception as error:

@@ -236,7 +236,8 @@ def format_similar_episodes(results):
 async def build_ai_request(
     messages,
     user_instruction,
-    memory
+    memory,
+    workspace=None
 ):
     dialog_context = (
         build_dialog_context(
@@ -264,11 +265,23 @@ async def build_ai_request(
         )
     )
 
-    relevant_memories = (
-        await find_relevant_memories(
-            messages
+    if workspace is None:
+        relevant_memories = (
+            await find_relevant_memories(
+                messages
+            )
         )
-    )
+
+    else:
+        relevant_memories = (
+            await find_relevant_memories(
+                messages,
+                base_embeddings_filename=
+                    workspace.memory_embeddings,
+                live_embeddings_filename=
+                    workspace.memory_embeddings_live
+            )
+        )
 
     relevant_memory_text = (
         format_relevant_memories(
@@ -277,11 +290,28 @@ async def build_ai_request(
     )
 
     if current_incoming:
-        similar_episodes = (
-            await find_similar_episodes(
-                messages
+        if workspace is None:
+            similar_episodes = (
+                await find_similar_episodes(
+                    messages
+                )
             )
-        )
+
+        else:
+            similar_episodes = (
+                await find_similar_episodes(
+                    messages,
+                    episodes_filename=
+                        workspace.episodes,
+                    base_embeddings_filename=
+                        workspace.episode_embeddings,
+                    live_embeddings_filename=
+                        workspace.episode_embeddings_live,
+                    deleted_filename=
+                        workspace.deleted_message_ids
+                )
+            )
+
     else:
         similar_episodes = []
 
