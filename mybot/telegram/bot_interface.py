@@ -1,4 +1,5 @@
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+import logging
 from telegram.error import TelegramError
 from telegram.ext import (
     Application,
@@ -13,6 +14,7 @@ from mybot.app.session_state import (
     SessionState
 )
 from mybot.config import Config
+from mybot.storage.reply_journal import record_generation
 from mybot.services.reply_service import (
     ReplyService
 )
@@ -25,6 +27,8 @@ from mybot.telegram.bot_panel import BotPanel
 from mybot.telegram.bot_callbacks import BotCallbacks
 from mybot.telegram.bot_menu import BotMenu
 from mybot.telegram.bot_operations import active_operation
+from mybot.telegram.bot_reply_actions import BotReplyActions, variants_markup, variants_text
+from mybot.telegram.bot_feedback import BotFeedback
 
 
 class BotInterface:
@@ -60,6 +64,8 @@ class BotInterface:
 
         self.application = None
         self.callbacks = BotCallbacks(self)
+        self.reply_actions = BotReplyActions(self)
+        self.feedback = BotFeedback(self)
         self.menu = BotMenu(self)
         self.panel = BotPanel(self)
         self.runtime_controller = None
@@ -124,7 +130,8 @@ class BotInterface:
         self,
         message,
         text,
-        chunk_size=3000
+        chunk_size=4096,
+        reply_markup=None,
     ):
         for start in range(
             0,
@@ -135,7 +142,8 @@ class BotInterface:
                 text[
                     start:
                     start + chunk_size
-                ]
+                ],
+                reply_markup=reply_markup if start + chunk_size >= len(text) else None,
             )
 
 
@@ -147,9 +155,25 @@ class BotInterface:
         if not self.is_owner(update):
             return
         context.user_data.pop("awaiting_mood", None)
+        context.user_data.pop("pending_reply_edit", None)
         await self.panel.show()
         await self.menu.move_to_bottom()
-        await self.menu.show(update.effective_message, self.menu_title(), main_menu())
+        await self.menu.show(update.effective_message, self.menu_title(),
+                             self.main_menu())
+
+    def main_menu(self):
+        return main_menu(active=self.workspace is not None,
+                         typing=bool(self.runtime_controller and
+                                     self.workspace and
+                                     getattr(getattr(self.runtime_controller, "typing", None),
+                                             "dialog_id", None) == self.workspace.dialog_id),
+                         panel_hidden=self.panel.hidden)
+
+    async def panel_command(self, update, context):
+        if not self.is_owner(update):
+            return
+        await self.panel.show()
+        await self.menu.show(update.effective_message, self.menu_title(), self.main_menu())
 
     async def status_command(self, update, context):
         await self.callbacks.dispatch("ui:status", update, context)
@@ -244,14 +268,29 @@ class BotInterface:
                 answers
             )
         )
+        if len(variants) != 3:
+            await self.callbacks.show(update.effective_message,
+                "Не удалось получить три отдельных варианта. Нажмите «Ответ» ещё раз.")
+            return
 
-        await self.menu.show(update.effective_message, self.menu_title(), main_menu())
-
-        for variant in variants:
-            await self.send_long_text(
-                update.effective_message,
-                variant
+        journal_warning = None
+        generation_id = None
+        try:
+            generation_id = record_generation(self.workspace, variants,
+                              self.reply_service.last_context_message_id,
+                              Config.OPENAI_MODEL)
+        except Exception:
+            logging.exception("Не удалось сохранить варианты в журнале диалога")
+            journal_warning = (
+                "Не удалось сохранить варианты для будущего обучения. "
+                "Проверьте журнал программы."
             )
+
+        if journal_warning:
+            await self.send_long_text(update.effective_message, journal_warning)
+        text = variants_text(variants)
+        await self.send_long_text(update.effective_message, text,
+            reply_markup=variants_markup(generation_id) if generation_id else None)
 
 
     async def reply_command(
@@ -296,6 +335,9 @@ class BotInterface:
             await self.callbacks.show(update.effective_message, f"Настроение установлено:\n{instruction}")
             return
 
+        if await self.reply_actions.handle_text(instruction, context):
+            return
+
         await self.send_generated_answers(
             update,
             instruction
@@ -318,6 +360,12 @@ class BotInterface:
         dialog_name,
         message
     ):
+        await self.send_live_message(dialog_name, message, outgoing=False)
+
+    async def send_outgoing_message(self, dialog_name, message):
+        await self.send_live_message(dialog_name, message, outgoing=True)
+
+    async def send_live_message(self, dialog_name, message, *, outgoing):
         text = message.get(
             "text"
         )
@@ -335,7 +383,7 @@ class BotInterface:
             )
 
         bot_text = (
-            f"{dialog_name}:\n{text}"
+            f"{'➡️ Вы' if outgoing else '⬅️ ' + dialog_name}:\n{text}"
         )
 
         for start in range(
@@ -343,12 +391,22 @@ class BotInterface:
             len(bot_text),
             3000
         ):
+            last_chunk = start + 3000 >= len(bot_text)
+            markup = None
+            if (outgoing and last_chunk and self.workspace is not None
+                    and message.get('message_id') is not None
+                    and message.get('text')):
+                markup = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("📝 Разметить ответ",
+                        callback_data=(f"ui:fb:{self.workspace.dialog_id}:"
+                                       f"{message['message_id']}"))]])
             await self.application.bot.send_message(
                 chat_id=self.owner_id,
                 text=bot_text[
                     start:
                     start + 3000
-                ]
+                ],
+                reply_markup=markup,
             )
 
 
@@ -376,6 +434,7 @@ class BotInterface:
 
         self.application.add_handler(CommandHandler("status", self.status_command))
         self.application.add_handler(CommandHandler("style", self.style_command))
+        self.application.add_handler(CommandHandler("panel", self.panel_command))
         self.application.add_handler(
             CallbackQueryHandler(self.callbacks.handle, pattern=r"^ui:")
         )
@@ -462,7 +521,7 @@ class BotInterface:
         )
 
         await self.application.start()
-        await self.menu.show(None, self.menu_title(), main_menu())
+        await self.menu.show(None, self.menu_title(), self.main_menu())
 
         print(
             "\nTelegram-интерфейс "

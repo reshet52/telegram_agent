@@ -1,6 +1,7 @@
 """Prepare one isolated runtime; the control bot owns all user interaction."""
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from mybot.episodes.incremental import initialize_episode_tracker
 from mybot.episodes.maintenance import ensure_episode_embeddings
@@ -11,6 +12,7 @@ from mybot.services.workspace_initializer import WorkspaceInitializer, is_prepar
 from mybot.storage.atomic import read_json
 from mybot.storage.deletions import check_recent_deletions, mark_messages_deleted
 from mybot.storage.history import load_all_messages, load_last_messages
+from mybot.storage.reply_journal import record_outgoing_replies
 from mybot.storage.workspace import create_workspace
 
 
@@ -38,6 +40,10 @@ async def prepare_dialog_runtime(client, selected_dialog, me, state,
     await import_history(client, selected_dialog, me.id, workspace, report)
     raw_history = await asyncio.to_thread(load_all_messages, filename=workspace.chat_history, include_deleted=True,
                                     deleted_filename=workspace.deleted_message_ids)
+    try:
+        await asyncio.to_thread(record_outgoing_replies, workspace, raw_history)
+    except Exception:
+        logging.exception("Не удалось восстановить исходящие сообщения в журнале диалога")
     await report('Проверка удалённых сообщений…')
     deleted = await check_recent_deletions(client=client, dialog_id=selected_dialog.id,
         messages=raw_history, deleted_filename=workspace.deleted_message_ids)

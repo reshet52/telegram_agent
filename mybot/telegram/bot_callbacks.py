@@ -2,7 +2,8 @@
 
 from telegram import InlineKeyboardButton
 from mybot.services.global_style import load_global_style
-from mybot.telegram.bot_keyboards import dialogs_menu, home_menu, main_menu
+from mybot.telegram.bot_keyboards import dialogs_menu, home_menu
+from mybot.telegram.bot_typing import handle_typing
 
 
 class BotCallbacks:
@@ -31,8 +32,26 @@ class BotCallbacks:
             context.user_data.pop("pending_dialog", None)
         if action != "ui:set_mood":
             context.user_data.pop("awaiting_mood", None)
+        keep_reply_input = (action.startswith("ui:draft:edit:")
+                            or action in {"ui:typing", "ui:typing_stop", "ui:typing_toggle"}
+                            or action.startswith("ui:typing_start:"))
+        if not keep_reply_input:
+            context.user_data.pop("pending_reply_edit", None)
         if action == "ui:home":
-            await self.show(message, bot.menu_title(), main_menu())
+            await self.show(message, bot.menu_title(), bot.main_menu())
+        elif action == "ui:leave":
+            if await bot.runtime_controller.deactivate():
+                await self.show(message, "Главное меню. Выберите диалог.", bot.main_menu())
+            else:
+                await self.show(message, "Дождитесь завершения текущей операции.")
+        elif action == "ui:panel_hide":
+            await bot.panel.hide()
+            await self.show(message, bot.menu_title(), bot.main_menu())
+        elif action == "ui:panel_show":
+            await bot.panel.show()
+            await self.show(message, bot.menu_title(), bot.main_menu())
+        elif action in {"ui:typing", "ui:typing_stop", "ui:typing_toggle"} or action.startswith("ui:typing_start:"):
+            await handle_typing(bot, action, message)
         elif action.startswith("ui:dialogs:"):
             await self.show_dialogs(message, context, action)
         elif action.startswith("ui:select:"):
@@ -50,6 +69,12 @@ class BotCallbacks:
                 dialog_id, lambda text: self.show(message, text))
         elif action == "ui:reply":
             await bot.send_generated_answers(update)
+        elif (action.startswith(("ui:rv:", "ui:rve:", "ui:draft:",
+                                 "ui:opts:", "ui:db:", "ui:unreject:", "ui:dc:"))
+              or action.startswith("ui:reject:")):
+            await bot.reply_actions.handle(action, context, message)
+        elif action.startswith(("ui:fb:", "ui:fl:", "ui:fi:", "ui:ff:")):
+            await bot.feedback.handle(action)
         elif action == "ui:context":
             await bot.show_command(update, context)
         elif action == "ui:mood":
@@ -120,9 +145,10 @@ class BotCallbacks:
             await bot.update_memory_command(update, context)
         elif action == "ui:settings":
             await self.show(message, bot.menu_title() + "\n\n"
-                "Ответы отправляются только вам.\n"
+                "Варианты ответа показываются только вам в этом боте. "
+                "Отправка собеседнику отключена; готовый текст можно скопировать.\n"
                 "Команды: /dialogs, /select, /reply, /show, /mood, "
-                "/clear_mood, /update_memory")
+                "/clear_mood, /update_memory, /panel")
         else:
             await self.show(message, "Откройте меню заново: /start")
 

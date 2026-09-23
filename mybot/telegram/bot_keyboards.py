@@ -6,15 +6,28 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMa
 DIALOGS_PAGE_SIZE = 8
 
 
-def main_menu():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("💬 Диалоги", callback_data="ui:dialogs:0"),
-         InlineKeyboardButton("✍️ Ответ", callback_data="ui:reply")],
-        [InlineKeyboardButton("📖 Контекст", callback_data="ui:context"),
-         InlineKeyboardButton("🎭 Настроение", callback_data="ui:mood")],
-        [InlineKeyboardButton("🧠 Память", callback_data="ui:memory"),
-         InlineKeyboardButton("⚙️ Настройки", callback_data="ui:settings")],
-    ])
+def main_menu(active=False, typing=False, panel_hidden=False):
+    if active:
+        rows = [
+            [InlineKeyboardButton("✍️ Ответ", callback_data="ui:reply"),
+             InlineKeyboardButton("📖 Контекст", callback_data="ui:context")],
+            [InlineKeyboardButton("🎭 Настроение", callback_data="ui:mood"),
+             InlineKeyboardButton("🧠 Память", callback_data="ui:memory")],
+            [InlineKeyboardButton("⌨️ Печать: вкл" if typing else "⌨️ Печать: выкл",
+                                  callback_data="ui:typing_toggle")],
+            [InlineKeyboardButton("⬅️ Выйти из диалога", callback_data="ui:leave")],
+        ]
+    else:
+        rows = [
+            [InlineKeyboardButton("💬 Диалоги", callback_data="ui:dialogs:0")],
+            [InlineKeyboardButton("🖋 Мой стиль", callback_data="ui:style"),
+             InlineKeyboardButton("⏳ Подготовка", callback_data="ui:status")],
+            [InlineKeyboardButton("⚙️ Настройки", callback_data="ui:settings")],
+        ]
+    rows.append([InlineKeyboardButton(
+        "👁 Показать пульт" if panel_hidden else "🫥 Скрыть пульт",
+        callback_data="ui:panel_show" if panel_hidden else "ui:panel_hide")])
+    return InlineKeyboardMarkup(rows)
 
 
 def home_menu(extra_rows=None):
@@ -45,14 +58,14 @@ def dialogs_menu(dialogs, page):
 
 PANEL_ACTIONS = {
     "💬 Диалоги": "ui:dialogs:0", "✍️ Ответ": "ui:reply",
-    "📖 Контекст": "ui:context", "🎭 Настроение": "ui:mood",
-    "🧠 Память": "ui:memory", "🖋 Мой стиль": "ui:style",
-    "🏠 Меню": "ui:home", "⏳ Подготовка": "ui:status",
+    "📖 Контекст": "ui:context", "⌨️ Печать": "ui:typing_toggle",
+    "🏠 Меню": "ui:home", "🫥 Скрыть пульт": "ui:panel_hide",
 }
 
 
-def control_panel():
-    labels = list(PANEL_ACTIONS)
+def control_panel(active=False):
+    labels = (["✍️ Ответ", "📖 Контекст", "⌨️ Печать", "🏠 Меню", "🫥 Скрыть пульт"]
+              if active else ["💬 Диалоги", "🏠 Меню", "🫥 Скрыть пульт"])
     return ReplyKeyboardMarkup([labels[i:i + 2] for i in range(0, len(labels), 2)],
                                resize_keyboard=True, is_persistent=True,
                                input_field_placeholder="Инструкция для ответа или кнопка пульта")

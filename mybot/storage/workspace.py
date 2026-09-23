@@ -43,6 +43,10 @@ class Workspace:
         )
 
     @property
+    def reply_journal(self):
+        return self.root / "reply_journal.sqlite3"
+
+    @property
     def full_history_analysis(self):
         return (
             self.root

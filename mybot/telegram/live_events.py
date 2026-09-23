@@ -1,4 +1,5 @@
 import asyncio
+import logging
 
 from telethon import events
 
@@ -12,6 +13,7 @@ from mybot.telegram.exporter import (
     append_message_data,
     message_to_data
 )
+from mybot.storage.reply_journal import record_outgoing_reply
 
 
 class LiveEvents:
@@ -27,9 +29,11 @@ class LiveEvents:
         known_message_ids,
         bot_interface,
         episode_tracker,
-        recent_messages_limit=15
+        recent_messages_limit=15,
+        typing_service=None,
     ):
         self.enabled = False
+        self.typing_service = typing_service
         self.client = client
         self.selected_dialog = (
             selected_dialog
@@ -231,6 +235,9 @@ class LiveEvents:
                 )
             )
 
+            if new_message.get("sender") == "Я" and self.typing_service is not None:
+                await self.typing_service.stop(self.selected_dialog.id)
+
             message_id = (
                 new_message.get(
                     "message_id"
@@ -248,6 +255,12 @@ class LiveEvents:
                     message_id
                 )
 
+            if new_message.get("sender") == "Я":
+                try:
+                    record_outgoing_reply(self.workspace, new_message)
+                except Exception:
+                    logging.exception("Не удалось сохранить исходящее сообщение в журнале")
+
             append_message_data(
                 new_message,
                 filename=
@@ -258,6 +271,12 @@ class LiveEvents:
             self.recent_messages.append(
                 new_message
             )
+
+            if new_message.get("sender") != "Я" and self.typing_service is not None:
+                try:
+                    await self.typing_service.on_incoming(self.selected_dialog.id)
+                except Exception:
+                    print("Не удалось обновить прочтение; индикатор печати остановлен.")
 
             if (
                 len(self.recent_messages)
@@ -305,6 +324,13 @@ class LiveEvents:
                     )
 
                     print(error)
+
+            else:
+                try:
+                    await self.bot_interface.send_outgoing_message(
+                        self.dialog_name, new_message)
+                except Exception:
+                    logging.exception("Не удалось показать исходящее сообщение в боте")
 
             try:
                 new_episode = (

@@ -4,7 +4,7 @@ import asyncio
 import logging
 
 from telegram.error import BadRequest, TelegramError
-from mybot.telegram.bot_panel import PANEL_TEXT
+from mybot.telegram.bot_panel import PANEL_TEXT, PANEL_HIDDEN_TEXT
 
 
 class BotMenu:
@@ -27,6 +27,8 @@ class BotMenu:
             await self._show(source, text, reply_markup)
 
     async def _show(self, source, text, reply_markup=None):
+        if source is not None and self.is_variant_message(source):
+            source = None
         # A callback may belong to a menu left by the previous process.
         if source is not None and getattr(source, "reply_markup", None):
             if self.message is None:
@@ -51,6 +53,28 @@ class BotMenu:
             chat_id=self.interface.owner_id, text=text, reply_markup=reply_markup,
         )
 
+    @staticmethod
+    def is_variant_message(message):
+        markup = getattr(message, "reply_markup", None)
+        if markup is None:
+            return False
+        # python-telegram-bot objects and Telethon history expose different rows.
+        rows = getattr(markup, "inline_keyboard", None)
+        if rows is None:
+            rows = [row.buttons for row in getattr(markup, "rows", [])]
+        for row in rows:
+            for button in row:
+                data = getattr(button, "callback_data", None) or getattr(button, "data", None)
+                if isinstance(data, bytes) and data.startswith((
+                        b"ui:rv:", b"ui:rve:", b"ui:draft:", b"ui:db:",
+                        b"ui:unreject:", b"ui:fb:")):
+                    return True
+                if isinstance(data, str) and data.startswith((
+                        "ui:rv:", "ui:rve:", "ui:draft:", "ui:db:",
+                        "ui:unreject:", "ui:fb:")):
+                    return True
+        return False
+
 
     async def clean_previous_menus(self):
         """Remove only recognizable bot-owned UI messages in the recent chat."""
@@ -62,7 +86,7 @@ class BotMenu:
             async for item in client.iter_messages(bot.username, limit=200):
                 if item.sender_id != bot.id:
                     continue
-                if getattr(item, 'text', None) == PANEL_TEXT:
+                if getattr(item, 'text', None) in {PANEL_TEXT, PANEL_HIDDEN_TEXT}:
                     try:
                         await bot.delete_message(chat_id=self.interface.owner_id, message_id=item.id)
                     except TelegramError:
@@ -76,6 +100,9 @@ class BotMenu:
                     isinstance(getattr(button, "data", None), bytes)
                     and button.data.startswith(b"ui:") for button in buttons
                 ):
+                    continue
+                if self.is_variant_message(item):
+                    # Generated variants are content, not transient navigation.
                     continue
                 try:
                     await bot.delete_message(chat_id=self.interface.owner_id, message_id=item.id)

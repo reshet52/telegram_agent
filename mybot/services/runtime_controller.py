@@ -5,8 +5,10 @@ import logging
 import time
 
 from mybot.services.dialog_runtime import prepare_dialog_runtime
+from mybot.services.typing_service import TypingService
 from mybot.storage.workspace import get_workspace_root, get_global_root
 from mybot.storage.atomic import read_json, write_json
+from mybot.storage.reply_journal import record_outgoing_reply
 from mybot.telegram.live_events import LiveEvents
 from mybot.telegram.exporter import fetch_messages_after, append_message_data
 from mybot.storage.history import get_last_saved_message_id
@@ -18,6 +20,7 @@ class RuntimeController:
         self.client = client
         self.me = me
         self.bot = bot
+        self.typing = TypingService(client)
         self.runtime = None
         self.listener = None
         self.task = None
@@ -82,6 +85,7 @@ class RuntimeController:
 
         try:
             async with self.lock:
+                await self.typing.stop()
                 dialog = await self.bot.agent_manager.find_dialog(dialog_id)
                 if dialog is None or dialog_id == self.bot.control_bot_id:
                     raise ValueError("Диалог недоступен.")
@@ -98,6 +102,7 @@ class RuntimeController:
                     recent_messages=runtime.recent_messages,
                     known_message_ids=runtime.known_message_ids,
                     bot_interface=self.bot, episode_tracker=runtime.episode_tracker,
+                    typing_service=self.typing,
                 )
                 # Register before catching up the preparation window. The listener
                 # lock and known IDs serialize and deduplicate overlapping events.
@@ -113,6 +118,11 @@ class RuntimeController:
                             message_id = message.get("message_id")
                             if message_id in runtime.known_message_ids:
                                 continue
+                            if message.get("sender") == "Я":
+                                try:
+                                    record_outgoing_reply(runtime.workspace, message)
+                                except Exception:
+                                    logging.exception("Не удалось сохранить исходящее сообщение в журнале")
                             append_message_data(message, filename=runtime.workspace.chat_history)
                             runtime.known_message_ids.add(message_id)
                             runtime.recent_messages.append(message)
@@ -146,6 +156,11 @@ class RuntimeController:
                            "Активный диалог отключён. Повторите открытие после устранения ошибки.")
         else:
             self.job["status"] = "ready"
+            if self.bot.application:
+                try:
+                    await self.bot.panel.refresh()
+                except Exception:
+                    logging.exception("Не удалось обновить пульт диалога")
             await progress(f"Активный диалог: {runtime.dialog_name}\n"
                            "Можно смотреть контекст и создавать ответы.")
         finally:
@@ -166,6 +181,7 @@ class RuntimeController:
             except asyncio.CancelledError:
                 pass
             if self.busy:  # Cancelled before the background coroutine started.
+                await self.typing.stop()
                 if self.listener:
                     await self.listener.unregister()
                 self.clear_runtime()
@@ -182,6 +198,24 @@ class RuntimeController:
         await self.activate(self.job['dialog_id'], progress, self.job.get('full_analysis', False))
 
     async def stop(self):
+        await self.typing.stop()
         await self.pause()
         if self.listener:
             await self.listener.unregister()
+
+    async def deactivate(self):
+        """Leave the active dialog and remove its listener without discarding workspace data."""
+        if self.busy or self.lock.locked():
+            return False
+        async with self.lock:
+            await self.typing.stop()
+            if self.listener:
+                await self.listener.unregister()
+            self.clear_runtime()
+            self.bot.agent_manager.selected_dialog = None
+        if self.bot.application:
+            try:
+                await self.bot.panel.refresh()
+            except Exception:
+                logging.exception("Не удалось обновить общий пульт")
+        return True

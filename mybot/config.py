@@ -14,7 +14,7 @@ class Config:
     SESSION_NAME = os.getenv("SESSION_NAME", "mybot_session")
 
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-    OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.6-luna")
+    OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-6-luna")
 
     AGENT_BOT_TOKEN = os.getenv(
         "AGENT_BOT_TOKEN"
@@ -22,7 +22,7 @@ class Config:
 
     ANALYSIS_MODEL = os.getenv(
         "ANALYSIS_MODEL",
-        "gpt-5.6-luna"
+        "gpt-6-luna"
     )
 
     if not OPENAI_API_KEY:

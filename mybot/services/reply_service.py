@@ -1,4 +1,5 @@
 import asyncio
+import json
 import re
 from pathlib import Path
 from mybot.ai.client import generate_answers
@@ -28,6 +29,7 @@ class ReplyService:
 
         self.memory = memory
         self.workspace = workspace
+        self.last_context_message_id = None
 
         self.generation_lock = (
             asyncio.Lock()
@@ -87,6 +89,10 @@ class ReplyService:
             self.recent_messages
         )
 
+        self.last_context_message_id = max(
+            (item.get("message_id") for item in messages_snapshot
+             if item.get("message_id") is not None), default=None)
+
         async with self.generation_lock:
             ai_request = (
                 await build_ai_request(
@@ -135,6 +141,15 @@ class ReplyService:
 
     @staticmethod
     def split_variants(text):
+        try:
+            parsed = json.loads(text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip())
+            if isinstance(parsed, dict):
+                parsed = parsed.get("variants")
+            if isinstance(parsed, list) and len(parsed) == 3 and all(
+                    isinstance(item, str) and item.strip() for item in parsed):
+                return [item.strip() for item in parsed]
+        except (ValueError, TypeError):
+            pass
         pattern = (
             r"(?ms)^\s*[123][\.\)]\s*"
             r"(.*?)"
@@ -151,7 +166,10 @@ class ReplyService:
 
         if len(variants) == 3:
             return variants
-
-        return [
-            text.strip()
-        ]
+        paragraphs = [item.strip() for item in re.split(r"\n\s*\n", text.strip()) if item.strip()]
+        if len(paragraphs) == 3:
+            return paragraphs
+        lines = [item.strip() for item in text.splitlines() if item.strip()]
+        if len(lines) == 3:
+            return lines
+        return []

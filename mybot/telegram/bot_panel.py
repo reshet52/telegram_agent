@@ -1,17 +1,19 @@
 """Persistent keyboard controls next to the Telegram input field."""
 
-from telegram import BotCommand, MenuButtonCommands
+from telegram import BotCommand, MenuButtonCommands, ReplyKeyboardRemove
 from telegram.error import TelegramError
 from mybot.telegram.bot_keyboards import control_panel
 
 
 PANEL_TEXT = 'Пульт управления готов. Выберите действие возле поля ввода.'
+PANEL_HIDDEN_TEXT = 'Пульт скрыт. Вернуть: /panel или кнопка в меню.'
 
 
 class BotPanel:
     def __init__(self, interface):
         self.interface = interface
         self.message = None
+        self.hidden = False
 
     async def install(self):
         api = self.interface.application.bot
@@ -22,15 +24,33 @@ class BotPanel:
             BotCommand('show', 'Показать контекст'),
             BotCommand('status', 'Прогресс и продолжение подготовки'),
             BotCommand('style', 'Общий стиль общения'),
+            BotCommand('panel', 'Показать пульт'),
         ])
         await api.set_chat_menu_button(chat_id=self.interface.owner_id, menu_button=MenuButtonCommands())
         await self.show()
 
     async def show(self):
+        self.hidden = False
         if self.message:
             try:
                 await self.message.delete()
             except TelegramError:
                 pass
         self.message = await self.interface.application.bot.send_message(
-            chat_id=self.interface.owner_id, text=PANEL_TEXT, reply_markup=control_panel())
+            chat_id=self.interface.owner_id, text=PANEL_TEXT,
+            reply_markup=control_panel(active=self.interface.workspace is not None))
+
+    async def hide(self):
+        self.hidden = True
+        if self.message:
+            try:
+                await self.message.delete()
+            except TelegramError:
+                pass
+        self.message = await self.interface.application.bot.send_message(
+            chat_id=self.interface.owner_id, text=PANEL_HIDDEN_TEXT,
+            reply_markup=ReplyKeyboardRemove())
+
+    async def refresh(self):
+        if not self.hidden:
+            await self.show()
