@@ -12,3 +12,12 @@ __pycache__/
 /exports/
 
 .DS_Store
+
+# Local Codex instructions and settings
+AGENTS.md
+AGENTS.override.md
+.codex/
+.agents/
+
+# Personal study guides and project learning maps
+/docs/
