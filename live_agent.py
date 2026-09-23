@@ -1,100 +1,38 @@
-from mybot.app.session_state import (
-    SessionState
-)
-from mybot.app.terminal_interface import (
-    TerminalInterface
-)
-from mybot.services.dialog_runtime import (
-    prepare_dialog_runtime
-)
+"""Start once; all normal interaction takes place in the private Telegram bot."""
+
+import asyncio
+
+from mybot.app.session_state import SessionState
+from mybot.services.runtime_controller import RuntimeController
+from mybot.telegram.bot_interface import BotInterface
 from mybot.telegram.client import client
-from mybot.telegram.dialogs import (
-    choose_dialog
-)
-from mybot.telegram.live_events import (
-    LiveEvents
-)
-
-
-RECENT_MESSAGES_LIMIT = 15
 
 
 async def main():
-    state = SessionState()
-
-    print(
-        "\nВыбери диалог для "
-        "real-time режима:\n"
-    )
-
-    selected_dialog = (
-        await choose_dialog(
-            client
-        )
-    )
-
-    me = await client.get_me()
-
-    runtime = (
-        await prepare_dialog_runtime(
-            client=client,
-            selected_dialog=
-                selected_dialog,
-            me=me,
-            state=state,
-            recent_messages_limit=
-                RECENT_MESSAGES_LIMIT
-        )
-    )
-
-    if runtime is None:
-        return
-
-    live_events = LiveEvents(
-        client=client,
-        selected_dialog=
-            selected_dialog,
-        me=me,
-        dialog_name=
-            runtime.dialog_name,
-        workspace=
-            runtime.workspace,
-        raw_history=
-            runtime.raw_history,
-        recent_messages=
-            runtime.recent_messages,
-        known_message_ids=
-            runtime.known_message_ids,
-        bot_interface=
-            runtime.bot_interface,
-        episode_tracker=
-            runtime.episode_tracker,
-        recent_messages_limit=
-            RECENT_MESSAGES_LIMIT
-    )
-
-    live_events.register()
-
-    terminal_interface = (
-        TerminalInterface(
-            state=state,
-            recent_messages=
-                runtime.recent_messages,
-            reply_service=
-                runtime.reply_service,
-            workspace=
-                runtime.workspace
-        )
-    )
-
+    await client.connect()
     try:
-        await terminal_interface.run()
-
+        if not await client.is_user_authorized():
+            raise RuntimeError(
+                "Telegram-сессия не авторизована. Сначала выполните первоначальную "
+                "авторизацию аккаунта; обычный запуск не запрашивает ввод в консоли."
+            )
+        me = await client.get_me()
+        bot = BotInterface(me.id, [], None, SessionState(), telegram_client=client)
+        controller = RuntimeController(client, me, bot)
+        bot.runtime_controller = controller
+        try:
+            await bot.start()
+            print("Управление доступно в Telegram: /start. Остановка: Ctrl+C.")
+            await client.run_until_disconnected()
+        finally:
+            await controller.stop()
+            await bot.stop()
     finally:
-        await runtime.bot_interface.stop()
+        await client.disconnect()
 
 
-with client:
-    client.loop.run_until_complete(
-        main()
-    )
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass

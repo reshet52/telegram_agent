@@ -1,7 +1,9 @@
 from telegram import Update
+from telegram.error import TelegramError
 from telegram.ext import (
     Application,
     CommandHandler,
+    CallbackQueryHandler,
     ContextTypes,
     MessageHandler,
     filters
@@ -11,19 +13,19 @@ from mybot.app.session_state import (
     SessionState
 )
 from mybot.config import Config
-from mybot.memory.incremental import (
-    update_incremental_memory
-)
 from mybot.services.reply_service import (
     ReplyService
-)
-from mybot.telegram.dialogs import (
-    get_dialogs,
-    format_dialogs
 )
 from mybot.services.agent_manager import (
     AgentManager
 )
+
+from mybot.telegram.bot_keyboards import main_menu, PANEL_ACTIONS
+from mybot.telegram.bot_panel import BotPanel
+from mybot.telegram.bot_callbacks import BotCallbacks
+from mybot.telegram.bot_menu import BotMenu
+from mybot.telegram.bot_operations import active_operation
+
 
 class BotInterface:
     def __init__(
@@ -57,6 +59,11 @@ class BotInterface:
         )
 
         self.application = None
+        self.callbacks = BotCallbacks(self)
+        self.menu = BotMenu(self)
+        self.panel = BotPanel(self)
+        self.runtime_controller = None
+        self.control_bot_id = None
 
 
     def is_owner(
@@ -132,112 +139,36 @@ class BotInterface:
             )
 
 
-    async def start_command(
-        self,
-        update: Update,
-        context: ContextTypes.DEFAULT_TYPE
-    ):
-        if not self.is_owner(
-            update
-        ):
+    def menu_title(self):
+        active = self.workspace.dialog_name if self.workspace else "не выбран"
+        return f"AI Agent\nАктивный диалог: {active}"
+
+    async def start_command(self, update, context):
+        if not self.is_owner(update):
             return
+        context.user_data.pop("awaiting_mood", None)
+        await self.panel.show()
+        await self.menu.move_to_bottom()
+        await self.menu.show(update.effective_message, self.menu_title(), main_menu())
 
-        await update.message.reply_text(
-            "AI Agent запущен.\n\n"
-            "/dialogs — список диалогов\n"
-            "/select <ID> — выбрать диалог\n"
-            "/reply — предложить ответ\n"
-            "/show — текущий диалог\n"
-            "/mood — текущее настроение\n"
-            "/mood <текст> — задать настроение\n"
-            "/clear_mood — сбросить настроение\n"
-            "/update_memory — обновить память\n\n"
-            "Также можешь просто написать мне "
-            "обычным сообщением, что именно "
-            "нужно сказать собеседнику."
-        )
+    async def status_command(self, update, context):
+        await self.callbacks.dispatch("ui:status", update, context)
 
-    async def select_dialog_command(
-        self,
-        update: Update,
-        context: ContextTypes.DEFAULT_TYPE
-    ):
-        if not self.is_owner(
-            update
-        ):
+    async def style_command(self, update, context):
+        await self.callbacks.dispatch("ui:style", update, context)
+
+    async def select_dialog_command(self, update, context):
+        if not self.is_owner(update):
             return
-
-        if self.agent_manager is None:
-            await update.message.reply_text(
-                "AgentManager недоступен."
-            )
-
-            return
-
-        if not context.args:
-            await update.message.reply_text(
-                "Укажи ID диалога.\n\n"
-                "Например:\n"
-                "/select 5001521253"
-            )
-
-            return
-
         try:
-            dialog_id = int(
-                context.args[0]
-            )
-
-        except ValueError:
-            await update.message.reply_text(
-                "Dialog ID должен быть числом."
-            )
-
+            dialog_id = int(context.args[0])
+        except (ValueError, IndexError):
+            await self.callbacks.show(update.effective_message, "Укажите /select <ID диалога>.")
             return
+        await self.callbacks.select_dialog(
+            update.effective_message, f"ui:select:{dialog_id}:0", context)
 
-        message = (
-            await update.message.reply_text(
-                "Ищу диалог..."
-            )
-        )
-
-        try:
-            dialog = (
-                await self.agent_manager
-                .select_dialog(
-                    dialog_id
-                )
-            )
-
-        except Exception as error:
-            await message.edit_text(
-                "Ошибка получения диалога:\n"
-                f"{error}"
-            )
-
-            return
-
-        if dialog is None:
-            await message.edit_text(
-                "Диалог с таким ID "
-                "не найден."
-            )
-
-            return
-
-        dialog_name = (
-            dialog.name
-            or f"Dialog {dialog.id}"
-        )
-
-        await message.edit_text(
-            "Диалог выбран.\n\n"
-            f"Имя: {dialog_name}\n"
-            f"ID: {dialog.id}\n\n"
-            "Workspace пока не переключён."
-        )
-
-
+    @active_operation
     async def show_command(
         self,
         update: Update,
@@ -256,117 +187,32 @@ class BotInterface:
             text = "Контекст пуст."
 
         await self.send_long_text(
-            update.message,
+            update.effective_message,
             text
         )
 
-    async def dialogs_command(
-        self,
-        update: Update,
-        context: ContextTypes.DEFAULT_TYPE
-    ):
-        if not self.is_owner(
-            update
-        ):
+    async def dialogs_command(self, update, context):
+        if not self.is_owner(update):
             return
+        await self.callbacks.show_dialogs(update.effective_message, context, "ui:dialogs:0")
 
-        if self.telegram_client is None:
-            await update.message.reply_text(
-                "Telegram-клиент "
-                "недоступен."
-            )
 
+    async def mood_command(self, update, context):
+        if not self.is_owner(update):
             return
-
-        status_message = (
-            await update.message.reply_text(
-                "Загружаю список "
-                "диалогов..."
-            )
-        )
-
-        try:
-            dialogs = await get_dialogs(
-                self.telegram_client
-            )
-
-        except Exception as error:
-            await status_message.edit_text(
-                "Не удалось получить "
-                "диалоги:\n"
-                f"{error}"
-            )
-
-            return
-
-        await status_message.delete()
-
-        text = (
-            "Доступные диалоги:\n\n"
-            + format_dialogs(
-                dialogs
-            )
-        )
-
-        await self.send_long_text(
-            update.message,
-            text
-        )
-
-
-    async def mood_command(
-        self,
-        update: Update,
-        context: ContextTypes.DEFAULT_TYPE
-    ):
-        if not self.is_owner(
-            update
-        ):
-            return
-
         if context.args:
-            self.state.current_mood = (
-                " ".join(
-                    context.args
-                ).strip()
-            )
+            self.state.current_mood = " ".join(context.args).strip()
+        await self.callbacks.show(update.effective_message,
+            f"Настроение: {self.state.current_mood or 'не задано'}")
 
-            await update.message.reply_text(
-                "Настроение установлено:\n\n"
-                f"{self.state.current_mood}"
-            )
-
+    async def clear_mood_command(self, update, context):
+        if not self.is_owner(update):
             return
-
-        if self.state.current_mood:
-            await update.message.reply_text(
-                "Текущее настроение:\n\n"
-                f"{self.state.current_mood}"
-            )
-
-        else:
-            await update.message.reply_text(
-                "Настроение не задано."
-            )
-
-
-    async def clear_mood_command(
-        self,
-        update: Update,
-        context: ContextTypes.DEFAULT_TYPE
-    ):
-        if not self.is_owner(
-            update
-        ):
-            return
-
         self.state.current_mood = None
-
-        await update.message.reply_text(
-            "Настроение сброшено."
-        )
+        await self.callbacks.show(update.effective_message, "Настроение сброшено.")
 
 
+    @active_operation
     async def send_generated_answers(
         self,
         update,
@@ -377,11 +223,7 @@ class BotInterface:
         ):
             return
 
-        status_message = (
-            await update.message.reply_text(
-                "Генерирую ответ..."
-            )
-        )
+        await self.callbacks.show(update.effective_message, "Генерирую ответ…")
 
         try:
             answers = (
@@ -393,9 +235,7 @@ class BotInterface:
             )
 
         except Exception as error:
-            await status_message.edit_text(
-                f"Ошибка генерации:\n{error}"
-            )
+            await self.callbacks.show(update.effective_message, f"Ошибка генерации:\n{error}")
 
             return
 
@@ -405,13 +245,11 @@ class BotInterface:
             )
         )
 
-        await status_message.edit_text(
-            f"Вариантов: {len(variants)}"
-        )
+        await self.menu.show(update.effective_message, self.menu_title(), main_menu())
 
         for variant in variants:
             await self.send_long_text(
-                update.message,
+                update.effective_message,
                 variant
             )
 
@@ -444,9 +282,19 @@ class BotInterface:
         ):
             return
 
-        instruction = (
-            update.message.text.strip()
-        )
+        instruction = update.effective_message.text.strip()
+        if instruction in PANEL_ACTIONS:
+            await self.menu.move_to_bottom()
+            await self.callbacks.dispatch(PANEL_ACTIONS[instruction], update, context)
+            try:
+                await update.effective_message.delete()
+            except TelegramError:
+                pass
+            return
+        if context.user_data.pop("awaiting_mood", False):
+            self.state.current_mood = instruction
+            await self.callbacks.show(update.effective_message, f"Настроение установлено:\n{instruction}")
+            return
 
         await self.send_generated_answers(
             update,
@@ -454,63 +302,15 @@ class BotInterface:
         )
 
 
-    async def update_memory_command(
-        self,
-        update: Update,
-        context: ContextTypes.DEFAULT_TYPE
-    ):
-        if not self.is_owner(
-            update
-        ):
+    async def update_memory_command(self, update, context):
+        if not self.is_owner(update):
             return
-
-        message = (
-            await update.message.reply_text(
-                "Обновляю память..."
-            )
-        )
-
-        try:
-            if self.workspace is None:
-                result = (
-                    await update_incremental_memory()
-                )
-
-            else:
-                result = (
-                    await update_incremental_memory(
-                        history_filename=
-                            self.workspace.chat_history,
-                        deleted_filename=
-                            self.workspace.deleted_message_ids,
-                        base_episode_embeddings_filename=
-                            self.workspace.episode_embeddings,
-                        episodes_filename=
-                            self.workspace.episodes,
-                        live_memory_filename=
-                            self.workspace.agent_memory_live,
-                        live_memory_embeddings_filename=
-                            self.workspace.memory_embeddings_live,
-                        state_filename=
-                            self.workspace.memory_update_state
-                    )
-                )
-
-        except Exception as error:
-            await message.edit_text(
-                "Ошибка обновления памяти:\n"
-                f"{error}"
-            )
-
+        if self.workspace is None or self.runtime_controller is None:
+            await self.callbacks.show(update.effective_message,
+                                      "Сначала откройте диалог через меню «Диалоги».")
             return
-
-        await message.edit_text(
-            "Память обновлена.\n\n"
-            f"Новых сообщений: "
-            f'{result["messages"]}\n'
-            f"Новых memories: "
-            f'{result["memories"]}'
-        )
+        await self.runtime_controller.activate(self.workspace.dialog_id,
+            lambda text: self.callbacks.show(update.effective_message, text), full_analysis=True)
 
 
     async def send_incoming_message(
@@ -572,6 +372,12 @@ class BotInterface:
             .get_updates_connect_timeout(30)
             .get_updates_read_timeout(30)
             .build()
+        )
+
+        self.application.add_handler(CommandHandler("status", self.status_command))
+        self.application.add_handler(CommandHandler("style", self.style_command))
+        self.application.add_handler(
+            CallbackQueryHandler(self.callbacks.handle, pattern=r"^ui:")
         )
 
         self.application.add_handler(
@@ -645,6 +451,9 @@ class BotInterface:
         self.build_application()
 
         await self.application.initialize()
+        self.control_bot_id = self.application.bot.id
+        await self.menu.clean_previous_menus()
+        await self.panel.install()
 
         await (
             self.application
@@ -653,6 +462,7 @@ class BotInterface:
         )
 
         await self.application.start()
+        await self.menu.show(None, self.menu_title(), main_menu())
 
         print(
             "\nTelegram-интерфейс "
@@ -670,13 +480,11 @@ class BotInterface:
             "\nОстанавливаю Telegram-бота..."
         )
 
-        await (
-            self.application
-            .updater
-            .stop()
-        )
+        if self.application.updater.running:
+            await self.application.updater.stop()
 
-        await self.application.stop()
+        if self.application.running:
+            await self.application.stop()
         await self.application.shutdown()
 
         print(

@@ -1,3 +1,4 @@
 telethon
 python-dotenv
 openai
+python-telegram-bot>=22.8,<23

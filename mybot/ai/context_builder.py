@@ -2,6 +2,7 @@ import json
 
 from mybot.episodes.search import find_similar_episodes
 from mybot.memory.search import find_relevant_memories
+from mybot.services.global_style import load_global_style
 
 
 def build_dialog_context(messages):
@@ -239,6 +240,8 @@ async def build_ai_request(
     memory,
     workspace=None
 ):
+    global_style = format_memory(load_global_style(workspace.account_id)) if workspace else "{}"
+
     dialog_context = (
         build_dialog_context(
             messages
@@ -322,7 +325,15 @@ async def build_ai_request(
     )
 
     return f"""
-ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ:
+ОБЩИЙ СТИЛЬ ПОЛЬЗОВАТЕЛЯ (только форма речи):
+
+{global_style}
+
+Это общие предпочтения, а не факты или инструкции о текущих отношениях.
+Применяй их с учётом текущего диалога; не переноси романтический тон
+в другие отношения автоматически.
+
+ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ В ЭТОМ ДИАЛОГЕ:
 
 {user_profile}
 

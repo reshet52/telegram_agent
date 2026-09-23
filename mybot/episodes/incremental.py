@@ -1,3 +1,4 @@
+import asyncio
 import json
 from collections import deque
 from datetime import datetime
@@ -6,6 +7,8 @@ from pathlib import Path
 from mybot.ai.client import ai_client
 from mybot.config import Config
 from mybot.storage.history import load_all_messages
+from mybot.episodes.checkpoint import commit_batch, recover_batch
+from mybot.storage.atomic import durable_call
 
 
 DEFAULT_EPISODES_FILE = Path(
@@ -204,7 +207,7 @@ async def create_embeddings(
         texts = [
             build_embedding_text(
                 episode
-            )
+            )[:12000]
             for episode in batch
         ]
 
@@ -488,8 +491,10 @@ async def initialize_episode_tracker(
         DEFAULT_EPISODES_FILE,
     live_embeddings_filename=
         DEFAULT_LIVE_EMBEDDINGS_FILE,
-    deleted_filename=None
+    deleted_filename=None,
+    progress=None
 ):
+    recover_batch(episodes_filename, live_embeddings_filename)
     last_episode_id, last_message_id = (
         get_last_episode_info(
             episodes_filename
@@ -542,26 +547,13 @@ async def initialize_episode_tracker(
                 episode
             )
 
-    if new_episodes:
-        # Сначала создаём embeddings.
-        # Пока API не завершился успешно,
-        # episodes на диск не записываем.
-        embedding_records = (
-            await create_embeddings(
-                new_episodes
-            )
-        )
-
-        for episode in new_episodes:
-            append_episode(
-                episode,
-                episodes_filename
-            )
-
-        append_embedding_records(
-            embedding_records,
-            live_embeddings_filename
-        )
+    for start in range(0, len(new_episodes), 32):
+        batch = new_episodes[start:start + 32]
+        embedding_records = await create_embeddings(batch, batch_size=32)
+        await durable_call(commit_batch, batch, embedding_records,
+                                episodes_filename, live_embeddings_filename)
+        if progress:
+            await progress(f"Эпизоды и embeddings: {min(start + 32, len(new_episodes))}/{len(new_episodes)}")
 
     return (
         tracker,
@@ -595,14 +587,7 @@ async def process_live_episode_message(
         )
     )
 
-    append_episode(
-        episode,
-        episodes_filename
-    )
-
-    append_embedding_records(
-        embedding_records,
-        live_embeddings_filename
-    )
+    await durable_call(commit_batch, [episode], embedding_records,
+                            episodes_filename, live_embeddings_filename)
 
     return episode

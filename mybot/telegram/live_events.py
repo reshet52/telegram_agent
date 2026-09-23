@@ -29,6 +29,7 @@ class LiveEvents:
         episode_tracker,
         recent_messages_limit=15
     ):
+        self.enabled = False
         self.client = client
         self.selected_dialog = (
             selected_dialog
@@ -86,7 +87,13 @@ class LiveEvents:
         )
 
 
-    async def on_message_deleted(
+    async def on_message_deleted(self, event):
+        async with self.message_processing_lock:
+            if not self.enabled:
+                return
+            await self._on_message_deleted(event)
+
+    async def _on_message_deleted(
         self,
         event
     ):
@@ -214,6 +221,8 @@ class LiveEvents:
         async with (
             self.message_processing_lock
         ):
+            if not self.enabled:
+                return
             new_message = (
                 await message_to_data(
                     event.message,
@@ -340,6 +349,7 @@ class LiveEvents:
     def register(
         self
     ):
+        self.enabled = True
         self.client.add_event_handler(
             self.on_new_message,
             events.NewMessage(
@@ -352,3 +362,10 @@ class LiveEvents:
             self.on_message_deleted,
             events.MessageDeleted()
         )
+
+    async def unregister(self):
+        self.enabled = False
+        self.client.remove_event_handler(self.on_new_message)
+        self.client.remove_event_handler(self.on_message_deleted)
+        async with self.message_processing_lock:
+            pass
