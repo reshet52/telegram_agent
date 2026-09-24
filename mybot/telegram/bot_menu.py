@@ -13,14 +13,26 @@ class BotMenu:
         self.message = None
         self.lock = asyncio.Lock()
 
+    def _saved_id(self):
+        state = getattr(self.interface, "control_state", None)
+        return state.get("menu_message_id") if state else None
+
+    def _remember(self, message_id):
+        state = getattr(self.interface, "control_state", None)
+        if state:
+            state.set(menu_message_id=message_id)
+
     async def move_to_bottom(self):
         async with self.lock:
-            if self.message is not None:
+            message_id = self.message.message_id if self.message is not None else self._saved_id()
+            if message_id is not None:
                 try:
-                    await self.message.delete()
+                    await self.interface.application.bot.delete_message(
+                        chat_id=self.interface.owner_id, message_id=message_id)
                 except TelegramError:
                     pass
                 self.message = None
+                self._remember(None)
 
     async def show(self, source, text, reply_markup=None):
         async with self.lock:
@@ -31,7 +43,13 @@ class BotMenu:
             source = None
         # A callback may belong to a menu left by the previous process.
         if source is not None and getattr(source, "reply_markup", None):
-            if self.message is None:
+            saved_id = self._saved_id()
+            if saved_id and source.message_id != saved_id:
+                try:
+                    await source.delete()
+                except BadRequest:
+                    pass
+            elif self.message is None:
                 self.message = source
             elif source.message_id != self.message.message_id:
                 try:
@@ -41,6 +59,7 @@ class BotMenu:
         if self.message is not None:
             try:
                 await self.message.edit_text(text, reply_markup=reply_markup)
+                self._remember(self.message.message_id)
                 return
             except BadRequest as error:
                 if "message is not modified" in str(error).lower():
@@ -49,9 +68,22 @@ class BotMenu:
                     "message to edit not found", "message can't be edited",
                 )):
                     raise
+        elif self._saved_id():
+            try:
+                await self.interface.application.bot.edit_message_text(
+                    chat_id=self.interface.owner_id, message_id=self._saved_id(),
+                    text=text, reply_markup=reply_markup)
+                return
+            except BadRequest as error:
+                if "message is not modified" in str(error).lower():
+                    return
+                if not any(value in str(error).lower() for value in (
+                    "message to edit not found", "message can't be edited")):
+                    raise
         self.message = await self.interface.application.bot.send_message(
             chat_id=self.interface.owner_id, text=text, reply_markup=reply_markup,
         )
+        self._remember(self.message.message_id)
 
     @staticmethod
     def is_variant_message(message):
@@ -85,6 +117,8 @@ class BotMenu:
         try:
             async for item in client.iter_messages(bot.username, limit=200):
                 if item.sender_id != bot.id:
+                    continue
+                if item.id == self._saved_id():
                     continue
                 if getattr(item, 'text', None) in {PANEL_TEXT, PANEL_HIDDEN_TEXT}:
                     try:

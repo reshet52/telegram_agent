@@ -30,10 +30,8 @@ class LiveEvents:
         bot_interface,
         episode_tracker,
         recent_messages_limit=15,
-        typing_service=None,
     ):
         self.enabled = False
-        self.typing_service = typing_service
         self.client = client
         self.selected_dialog = (
             selected_dialog
@@ -235,9 +233,6 @@ class LiveEvents:
                 )
             )
 
-            if new_message.get("sender") == "Я" and self.typing_service is not None:
-                await self.typing_service.stop(self.selected_dialog.id)
-
             message_id = (
                 new_message.get(
                     "message_id"
@@ -271,12 +266,6 @@ class LiveEvents:
             self.recent_messages.append(
                 new_message
             )
-
-            if new_message.get("sender") != "Я" and self.typing_service is not None:
-                try:
-                    await self.typing_service.on_incoming(self.selected_dialog.id)
-                except Exception:
-                    print("Не удалось обновить прочтение; индикатор печати остановлен.")
 
             if (
                 len(self.recent_messages)

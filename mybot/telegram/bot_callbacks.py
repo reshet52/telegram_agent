@@ -3,7 +3,6 @@
 from telegram import InlineKeyboardButton
 from mybot.services.global_style import load_global_style
 from mybot.telegram.bot_keyboards import dialogs_menu, home_menu
-from mybot.telegram.bot_typing import handle_typing
 
 
 class BotCallbacks:
@@ -32,9 +31,7 @@ class BotCallbacks:
             context.user_data.pop("pending_dialog", None)
         if action != "ui:set_mood":
             context.user_data.pop("awaiting_mood", None)
-        keep_reply_input = (action.startswith("ui:draft:edit:")
-                            or action in {"ui:typing", "ui:typing_stop", "ui:typing_toggle"}
-                            or action.startswith("ui:typing_start:"))
+        keep_reply_input = action.startswith("ui:draft:edit:")
         if not keep_reply_input:
             context.user_data.pop("pending_reply_edit", None)
         if action == "ui:home":
@@ -44,14 +41,19 @@ class BotCallbacks:
                 await self.show(message, "Главное меню. Выберите диалог.", bot.main_menu())
             else:
                 await self.show(message, "Дождитесь завершения текущей операции.")
+        elif action == "ui:finish_dialog":
+            async def report(text, done=False):
+                await self.show(message, text,
+                    bot.main_menu() if done else home_menu())
+            await self.show(message, "Обновляю историю и закрываю диалог…", home_menu())
+            if not await bot.runtime_controller.finish_dialog(report):
+                await self.show(message, "Нет активного диалога или операция уже выполняется.")
         elif action == "ui:panel_hide":
             await bot.panel.hide()
             await self.show(message, bot.menu_title(), bot.main_menu())
         elif action == "ui:panel_show":
             await bot.panel.show()
             await self.show(message, bot.menu_title(), bot.main_menu())
-        elif action in {"ui:typing", "ui:typing_stop", "ui:typing_toggle"} or action.startswith("ui:typing_start:"):
-            await handle_typing(bot, action, message)
         elif action.startswith("ui:dialogs:"):
             await self.show_dialogs(message, context, action)
         elif action.startswith("ui:select:"):

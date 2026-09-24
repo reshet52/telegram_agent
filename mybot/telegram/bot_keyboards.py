@@ -6,15 +6,14 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMa
 DIALOGS_PAGE_SIZE = 8
 
 
-def main_menu(active=False, typing=False, panel_hidden=False):
+def main_menu(active=False, panel_hidden=False):
     if active:
         rows = [
             [InlineKeyboardButton("✍️ Ответ", callback_data="ui:reply"),
              InlineKeyboardButton("📖 Контекст", callback_data="ui:context")],
             [InlineKeyboardButton("🎭 Настроение", callback_data="ui:mood"),
              InlineKeyboardButton("🧠 Память", callback_data="ui:memory")],
-            [InlineKeyboardButton("⌨️ Печать: вкл" if typing else "⌨️ Печать: выкл",
-                                  callback_data="ui:typing_toggle")],
+            [InlineKeyboardButton("🔄 Обновить историю и завершить", callback_data="ui:finish_dialog")],
             [InlineKeyboardButton("⬅️ Выйти из диалога", callback_data="ui:leave")],
         ]
     else:
@@ -58,13 +57,13 @@ def dialogs_menu(dialogs, page):
 
 PANEL_ACTIONS = {
     "💬 Диалоги": "ui:dialogs:0", "✍️ Ответ": "ui:reply",
-    "📖 Контекст": "ui:context", "⌨️ Печать": "ui:typing_toggle",
+    "📖 Контекст": "ui:context",
     "🏠 Меню": "ui:home", "🫥 Скрыть пульт": "ui:panel_hide",
 }
 
 
 def control_panel(active=False):
-    labels = (["✍️ Ответ", "📖 Контекст", "⌨️ Печать", "🏠 Меню", "🫥 Скрыть пульт"]
+    labels = (["✍️ Ответ", "📖 Контекст", "🏠 Меню", "🫥 Скрыть пульт"]
               if active else ["💬 Диалоги", "🏠 Меню", "🫥 Скрыть пульт"])
     return ReplyKeyboardMarkup([labels[i:i + 2] for i in range(0, len(labels), 2)],
                                resize_keyboard=True, is_persistent=True,

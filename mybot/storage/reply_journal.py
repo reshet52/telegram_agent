@@ -6,6 +6,8 @@ from contextlib import closing
 from datetime import datetime, timezone
 from uuid import uuid4
 
+from mybot.storage.deletions import load_deleted_message_ids
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS generations (
@@ -62,6 +64,11 @@ CREATE TABLE IF NOT EXISTS draft_feedback (
     finalized_at TEXT,
     FOREIGN KEY (draft_id) REFERENCES reply_drafts(draft_id)
 );
+CREATE TABLE IF NOT EXISTS generation_context (
+    generation_id TEXT PRIMARY KEY,
+    trigger_text TEXT NOT NULL,
+    FOREIGN KEY (generation_id) REFERENCES generations(generation_id)
+);
 """
 
 
@@ -77,7 +84,7 @@ def _open(workspace):
     return connection
 
 
-def record_generation(workspace, variants, context_message_id, model):
+def record_generation(workspace, variants, context_message_id, model, trigger_text=""):
     """Persist candidates before the control bot presents them to the owner."""
     if not variants:
         raise ValueError("No generated variants to record")
@@ -94,7 +101,55 @@ def record_generation(workspace, variants, context_message_id, model):
                  datetime.now(timezone.utc).isoformat(), context_message_id, model,
                  json.dumps(candidates, ensure_ascii=False)),
             )
+            connection.execute(
+                "INSERT INTO generation_context VALUES (?, ?)",
+                (generation_id, trigger_text[:2000]),
+            )
     return generation_id
+
+
+def finalized_correction_candidates(workspace, limit=80):
+    """Only explicitly finalized answers from this workspace, newest first."""
+    if not workspace.reply_journal.exists():
+        return []
+    deleted_ids = load_deleted_message_ids(workspace.deleted_message_ids)
+    with closing(_open(workspace)) as connection:
+        connection.row_factory = sqlite3.Row
+        drafts = connection.execute(
+            "SELECT d.draft_id, d.generation_id, d.original_text, f.result, "
+            "c.trigger_text, f.finalized_at FROM draft_feedback f "
+            "JOIN reply_drafts d ON d.draft_id=f.draft_id "
+            "JOIN generation_context c ON c.generation_id=d.generation_id "
+            "WHERE d.account_id=? AND d.dialog_id=? AND f.status='finalized' "
+            "AND f.result IN ('accepted_with_edit', 'accepted_without_edit') "
+            "AND c.trigger_text != '' "
+            "ORDER BY f.finalized_at DESC LIMIT ?",
+            (workspace.account_id, workspace.dialog_id, limit),
+        ).fetchall()
+        if not drafts:
+            return []
+        ids = [row['draft_id'] for row in drafts]
+        placeholders = ','.join('?' for _ in ids)
+        messages = connection.execute(
+            "SELECT l.draft_id, o.message_id, o.text FROM draft_message_links l "
+            "JOIN outgoing_replies o ON o.message_id=l.message_id "
+            f"WHERE l.draft_id IN ({placeholders}) AND o.account_id=? AND o.dialog_id=? "
+            "ORDER BY o.message_id",
+            (*ids, workspace.account_id, workspace.dialog_id),
+        ).fetchall()
+    actual_by_draft = {draft_id: [] for draft_id in ids}
+    invalid_drafts = set()
+    for row in messages:
+        if row['message_id'] in deleted_ids:
+            invalid_drafts.add(row['draft_id'])
+            continue
+        if row['text']:
+            actual_by_draft[row['draft_id']].append(row['text'].strip())
+    return [
+        dict(row, actual_text='\n\n'.join(actual_by_draft[row['draft_id']]))
+        for row in drafts
+        if row['draft_id'] not in invalid_drafts and actual_by_draft[row['draft_id']]
+    ]
 
 
 def record_outgoing_reply(workspace, message):

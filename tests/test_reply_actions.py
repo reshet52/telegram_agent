@@ -41,8 +41,7 @@ class ReplyActionTests(unittest.IsolatedAsyncioTestCase):
         self.bot = BotInterface(1, [], NS(), SessionState(), workspace=self.workspace,
                                 telegram_client=Mock())
         self.bot.telegram_client.send_message = AsyncMock()
-        self.bot.runtime_controller = NS(busy=False, lock=asyncio.Lock(),
-                                         typing=NS(dialog_id=None, stop=AsyncMock()))
+        self.bot.runtime_controller = NS(busy=False, lock=asyncio.Lock())
         self.bot.menu = NS(show=AsyncMock(), move_to_bottom=AsyncMock())
         self.bot.application = NS(bot=NS(send_message=AsyncMock(),
                                          edit_message_text=AsyncMock()))
@@ -136,13 +135,6 @@ class ReplyActionTests(unittest.IsolatedAsyncioTestCase):
         await self.select()
         self.assertEqual(len(self.table('reply_drafts')), 1)
 
-    async def test_typing_toggle_preserves_pending_edit(self):
-        draft_id = await self.select(edit=True)
-        self.bot.runtime_controller.typing.phase = None
-        self.bot.runtime_controller.typing.start = AsyncMock()
-        await self.bot.callbacks.dispatch('ui:typing_toggle', update(), self.context)
-        self.assertEqual(self.context.user_data['pending_reply_edit'], (42, draft_id, 1))
-
     async def test_outgoing_feedback_requires_explicit_link_and_current_dialog(self):
         draft_id = await self.select(1)
         await self.bot.callbacks.dispatch(f'ui:draft:keep:{draft_id}', self.card, self.context)
@@ -210,6 +202,7 @@ class ReplyActionTests(unittest.IsolatedAsyncioTestCase):
         active_labels = [button.text for row in control_panel(active=True).keyboard
                          for button in row]
         self.assertNotIn('💬 Диалоги', active_labels)
+        self.assertNotIn('⌨️ Печать', active_labels)
         self.assertIn('🫥 Скрыть пульт', active_labels)
         global_labels = [button.text for row in control_panel(active=False).keyboard
                          for button in row]

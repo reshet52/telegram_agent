@@ -15,6 +15,8 @@ class Config:
 
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
     OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-6-luna")
+    USE_CORRECTION_EXAMPLES = os.getenv(
+        "USE_CORRECTION_EXAMPLES", "true").strip().lower() in {"1", "true", "yes", "on"}
 
     AGENT_BOT_TOKEN = os.getenv(
         "AGENT_BOT_TOKEN"

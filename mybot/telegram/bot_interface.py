@@ -63,6 +63,7 @@ class BotInterface:
         )
 
         self.application = None
+        self.control_state = None
         self.callbacks = BotCallbacks(self)
         self.reply_actions = BotReplyActions(self)
         self.feedback = BotFeedback(self)
@@ -163,10 +164,6 @@ class BotInterface:
 
     def main_menu(self):
         return main_menu(active=self.workspace is not None,
-                         typing=bool(self.runtime_controller and
-                                     self.workspace and
-                                     getattr(getattr(self.runtime_controller, "typing", None),
-                                             "dialog_id", None) == self.workspace.dialog_id),
                          panel_hidden=self.panel.hidden)
 
     async def panel_command(self, update, context):
@@ -278,7 +275,8 @@ class BotInterface:
         try:
             generation_id = record_generation(self.workspace, variants,
                               self.reply_service.last_context_message_id,
-                              Config.OPENAI_MODEL)
+                              Config.OPENAI_MODEL,
+                              getattr(self.reply_service, "last_trigger_text", ""))
         except Exception:
             logging.exception("Не удалось сохранить варианты в журнале диалога")
             journal_warning = (

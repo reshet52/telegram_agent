@@ -3,7 +3,8 @@
 import asyncio
 import logging
 from dataclasses import dataclass
-from mybot.episodes.incremental import initialize_episode_tracker
+from mybot.episodes.incremental import (initialize_episode_tracker, IncrementalEpisodeTracker,
+    get_last_episode_info, find_history_start, PREVIOUS_CONTEXT_LIMIT)
 from mybot.episodes.maintenance import ensure_episode_embeddings
 from mybot.memory.manager import load_agent_memory
 from mybot.services.reply_service import ReplyService
@@ -13,7 +14,9 @@ from mybot.storage.atomic import read_json
 from mybot.storage.deletions import check_recent_deletions, mark_messages_deleted
 from mybot.storage.history import load_all_messages, load_last_messages
 from mybot.storage.reply_journal import record_outgoing_replies
-from mybot.storage.workspace import create_workspace
+from mybot.storage.workspace import create_workspace, get_workspace_root
+from mybot.services.workspace_initializer import has_legacy_memory
+from mybot.storage.workspace import Workspace
 
 
 @dataclass
@@ -68,3 +71,31 @@ async def prepare_dialog_runtime(client, selected_dialog, me, state,
         known_message_ids={m['message_id'] for m in raw_history if m.get('message_id') is not None},
         reply_service=ReplyService(recent, memory, workspace=workspace),
         bot_interface=bot_interface, episode_tracker=tracker)
+
+
+def restore_ready_runtime(selected_dialog, me, bot_interface=None):
+    """Load a completed workspace without imports, indexing or OpenAI calls."""
+    root = get_workspace_root(me.id, selected_dialog.id)
+    name = selected_dialog.name or f"Dialog {selected_dialog.id}"
+    workspace = Workspace(me.id, selected_dialog.id, name, root)
+    if not workspace.chat_history.exists() or not (is_prepared(workspace) or has_legacy_memory(workspace)):
+        raise ValueError("Подготовка диалога не завершена. Нажмите «Продолжить» в статусе.")
+    raw_history = load_all_messages(filename=workspace.chat_history, include_deleted=True,
+                                    deleted_filename=workspace.deleted_message_ids)
+    active_history = load_all_messages(filename=workspace.chat_history,
+                                       deleted_filename=workspace.deleted_message_ids)
+    last_episode_id, last_message_id = get_last_episode_info(workspace.episodes)
+    # Missing nonzero checkpoint ID must remain a hard error.
+    start = find_history_start(active_history, last_message_id)
+    tracker = IncrementalEpisodeTracker(last_episode_id + 1,
+        active_history[max(0, start - PREVIOUS_CONTEXT_LIMIT):start])
+    # Reconstruct tracker state in memory; don't persist episodes or create embeddings.
+    for message in active_history[start:]:
+        tracker.process_message(message)
+    recent = load_last_messages(filename=workspace.chat_history, count=15,
+                                deleted_filename=workspace.deleted_message_ids)
+    memory = load_agent_memory(user_profile_filename=workspace.user_profile,
+                               person_profile_filename=workspace.person_profile)
+    return DialogRuntime(name, workspace, raw_history, recent,
+        {m['message_id'] for m in raw_history if m.get('message_id') is not None},
+        ReplyService(recent, memory, workspace=workspace), bot_interface, tracker)

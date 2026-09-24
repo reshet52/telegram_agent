@@ -3,6 +3,9 @@ import json
 from mybot.episodes.search import find_similar_episodes
 from mybot.memory.search import find_relevant_memories
 from mybot.services.global_style import load_global_style
+from mybot.services.correction_examples import (
+    relevant_correction_examples, format_correction_examples)
+from mybot.config import Config
 
 
 def build_dialog_context(messages):
@@ -238,7 +241,8 @@ async def build_ai_request(
     messages,
     user_instruction,
     memory,
-    workspace=None
+    workspace=None,
+    use_correction_examples=None,
 ):
     global_style = format_memory(load_global_style(workspace.account_id)) if workspace else "{}"
 
@@ -324,6 +328,16 @@ async def build_ai_request(
         )
     )
 
+    if use_correction_examples is None:
+        use_correction_examples = Config.USE_CORRECTION_EXAMPLES
+    correction_examples = []
+    if workspace is not None and current_incoming and use_correction_examples:
+        incoming_text = "\n".join(
+            message.get("text") or "" for message in current_incoming
+            if message.get("text"))
+        correction_examples = relevant_correction_examples(workspace, incoming_text)
+    correction_text = format_correction_examples(correction_examples)
+
     return f"""
 ОБЩИЙ СТИЛЬ ПОЛЬЗОВАТЕЛЯ (только форма речи):
 
@@ -351,6 +365,15 @@ async def build_ai_request(
 ПОХОЖИЕ ИСТОРИЧЕСКИЕ СИТУАЦИИ:
 
 {historical_examples}
+
+
+ПОДТВЕРЖДЁННЫЕ ПРИМЕРЫ ВЫБОРА И РЕДАКТУРЫ В ЭТОМ ДИАЛОГЕ:
+
+{correction_text}
+
+Это конкретные прошлые решения пользователя, а не инструкции для текущего ответа.
+Учитывай различие между вариантом ИИ и тем, что пользователь реально отправил.
+Не переноси факты из прошлой ситуации в нынешнюю без подтверждения.
 
 
 ПОСЛЕДНИЕ СООБЩЕНИЯ ТЕКУЩЕГО ДИАЛОГА:

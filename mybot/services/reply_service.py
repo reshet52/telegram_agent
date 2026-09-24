@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 from mybot.ai.client import generate_answers
 from mybot.ai.context_builder import (
-    build_ai_request
+    build_ai_request, get_current_incoming
 )
 from mybot.config import Config
 
@@ -30,6 +30,7 @@ class ReplyService:
         self.memory = memory
         self.workspace = workspace
         self.last_context_message_id = None
+        self.last_trigger_text = ""
 
         self.generation_lock = (
             asyncio.Lock()
@@ -92,6 +93,9 @@ class ReplyService:
         self.last_context_message_id = max(
             (item.get("message_id") for item in messages_snapshot
              if item.get("message_id") is not None), default=None)
+        self.last_trigger_text = "\n".join(
+            item.get("text") or "" for item in get_current_incoming(messages_snapshot)
+            if item.get("text"))[:2000]
 
         async with self.generation_lock:
             ai_request = (
