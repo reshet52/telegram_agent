@@ -114,13 +114,13 @@ class ControlTests(unittest.IsolatedAsyncioTestCase):
         bot.runtime_controller.activate.assert_awaited_once()
         self.assertNotIn('pending_dialog', context.user_data)
 
-    async def test_mood_text_does_not_generate(self):
+    async def test_old_mood_button_no_longer_enables_input(self):
         bot = self.bot()
         bot.send_generated_answers = AsyncMock()
         context = NS(user_data={})
         await bot.callbacks.handle(update(data='ui:set_mood'), context)
-        await bot.text_instruction(update(), context)
-        self.assertEqual(bot.state.current_mood, 'спокойное')
+        self.assertNotIn('awaiting_mood', context.user_data)
+        self.assertIsNone(bot.state.current_mood)
         bot.send_generated_answers.assert_not_awaited()
 
     async def test_switch_commits_workspace_together_and_drains_listener(self):

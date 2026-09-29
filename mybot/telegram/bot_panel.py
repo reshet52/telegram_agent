@@ -24,6 +24,9 @@ class BotPanel:
             BotCommand('show', 'Показать контекст'),
             BotCommand('status', 'Прогресс и продолжение подготовки'),
             BotCommand('style', 'Общий стиль общения'),
+            BotCommand('search', 'Поиск по истории диалога'),
+            BotCommand('goal', 'Цель диалога'),
+            BotCommand('clear_goal', 'Сбросить цель'),
             BotCommand('panel', 'Показать пульт'),
         ])
         await api.set_chat_menu_button(chat_id=self.interface.owner_id, menu_button=MenuButtonCommands())

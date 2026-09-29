@@ -3,6 +3,9 @@
 from telegram import InlineKeyboardButton
 from mybot.services.global_style import load_global_style
 from mybot.telegram.bot_keyboards import dialogs_menu, home_menu
+from mybot.telegram.bot_benchmark import clear_benchmark_input
+from mybot.telegram.bot_reply_review import handle_review
+from mybot.telegram.bot_learning import handle_learning
 
 
 class BotCallbacks:
@@ -27,10 +30,19 @@ class BotCallbacks:
         if message is None:
             return
         bot = self.interface
+        if action != 'ui:benchmark' and not action.startswith('ui:bm:'):
+            clear_benchmark_input(context)
         if not action.startswith("ui:activate:"):
             context.user_data.pop("pending_dialog", None)
-        if action != "ui:set_mood":
-            context.user_data.pop("awaiting_mood", None)
+        context.user_data.pop("awaiting_mood", None)
+        if not action.startswith('ui:goal'):
+            context.user_data.pop('awaiting_goal', None)
+        if action != 'ui:behavior' and not action.startswith('ui:bp:'):
+            context.user_data.pop('awaiting_behavior', None)
+        if action != "ui:history_search":
+            context.user_data.pop("awaiting_history_search", None)
+        if action != "ui:reply_instruction":
+            context.user_data.pop("awaiting_reply_instruction", None)
         keep_reply_input = action.startswith("ui:draft:edit:")
         if not keep_reply_input:
             context.user_data.pop("pending_reply_edit", None)
@@ -71,6 +83,23 @@ class BotCallbacks:
                 dialog_id, lambda text: self.show(message, text))
         elif action == "ui:reply":
             await bot.send_generated_answers(update)
+        elif action == 'ui:practice' or action.startswith('ui:rp:'):
+            await bot.reply_practice.handle(action, update, context)
+        elif action == 'ui:learning' or action.startswith('ui:ld:'):
+            await handle_learning(bot, action, update)
+        elif action == 'ui:benchmark' or action.startswith('ui:bm:'):
+            await bot.benchmark.handle(action, update, context)
+        elif action == "ui:random_fact" or action.startswith("ui:random_fact:"):
+            expected = action.split(":", 2)[2] if action.count(":") == 2 else None
+            await bot.random_fact_command(update, expected)
+        elif action == "ui:reply_instruction":
+            if bot.workspace is None or bot.runtime_controller is None or bot.runtime_controller.busy:
+                await self.show(message, "Сначала откройте диалог и дождитесь подготовки.")
+                return
+            context.user_data["awaiting_reply_instruction"] = bot.workspace.dialog_id
+            await self.show(message, "Напишите указания для следующего ответа. "
+                            "Следующее сообщение будет использовано как инструкция к промпту, "
+                            "а не отправлено собеседнику. Для отмены нажмите «Главное меню».")
         elif (action.startswith(("ui:rv:", "ui:rve:", "ui:draft:",
                                  "ui:opts:", "ui:db:", "ui:unreject:", "ui:dc:"))
               or action.startswith("ui:reject:")):
@@ -79,21 +108,22 @@ class BotCallbacks:
             await bot.feedback.handle(action)
         elif action == "ui:context":
             await bot.show_command(update, context)
-        elif action == "ui:mood":
-            await self.show(message,
-                f"Настроение: {bot.state.current_mood or 'не задано'}\n"
-                "Действует только в текущей сессии.",
-                home_menu([
-                    [InlineKeyboardButton("Задать настроение", callback_data="ui:set_mood")],
-                    [InlineKeyboardButton("Сбросить", callback_data="ui:clear_mood")],
-                ]))
-        elif action == "ui:set_mood":
-            context.user_data["awaiting_mood"] = True
-            await self.show(message, "Напишите настроение следующим сообщением.\n"
-                            "Для отмены нажмите «Главное меню».")
-        elif action == "ui:clear_mood":
-            bot.state.current_mood = None
-            await self.show(message, "Настроение сброшено.")
+        elif action == "ui:history_search":
+            if bot.workspace is None or bot.runtime_controller is None or bot.runtime_controller.busy:
+                await self.show(message, "Сначала откройте диалог и дождитесь подготовки.")
+                return
+            context.user_data["awaiting_history_search"] = bot.workspace.dialog_id
+            await self.show(message, "Напишите вопрос по истории этого диалога следующим сообщением. "
+                            "Ответ покажет ID и даты подтверждающих сообщений. Для отмены нажмите «Главное меню».")
+        elif action == 'ui:quality' or action.startswith('ui:rr:'):
+            await handle_review(bot, action, update)
+        elif action == 'ui:behavior' or action.startswith('ui:bp:'):
+            await bot.behavior.handle(action, update, context)
+        elif action == 'ui:goal' or action.startswith('ui:goal:'):
+            await bot.goal.handle(action, update, context)
+        elif action in {'ui:mood', 'ui:set_mood', 'ui:clear_mood'}:
+            # Historical mood buttons only open the replacement; never clear a saved goal.
+            await bot.goal.handle('ui:goal', update, context)
         elif action == "ui:status":
             controller = bot.runtime_controller
             rows = []
@@ -149,8 +179,8 @@ class BotCallbacks:
             await self.show(message, bot.menu_title() + "\n\n"
                 "Варианты ответа показываются только вам в этом боте. "
                 "Отправка собеседнику отключена; готовый текст можно скопировать.\n"
-                "Команды: /dialogs, /select, /reply, /show, /mood, "
-                "/clear_mood, /update_memory, /panel")
+                "Команды: /dialogs, /select, /reply, /show, /search, /goal, "
+                "/clear_goal, /update_memory, /panel")
         else:
             await self.show(message, "Откройте меню заново: /start")
 

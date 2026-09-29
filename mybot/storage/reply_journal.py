@@ -69,6 +69,18 @@ CREATE TABLE IF NOT EXISTS generation_context (
     trigger_text TEXT NOT NULL,
     FOREIGN KEY (generation_id) REFERENCES generations(generation_id)
 );
+CREATE TABLE IF NOT EXISTS generation_evidence (
+    generation_id TEXT PRIMARY KEY,
+    request_json TEXT NOT NULL,
+    decision_json TEXT NOT NULL,
+    FOREIGN KEY (generation_id) REFERENCES generations(generation_id)
+);
+CREATE TABLE IF NOT EXISTS generation_reviews (
+    generation_id TEXT PRIMARY KEY,
+    rating TEXT NOT NULL,
+    reviewed_at TEXT NOT NULL,
+    FOREIGN KEY (generation_id) REFERENCES generations(generation_id)
+);
 """
 
 
@@ -84,9 +96,10 @@ def _open(workspace):
     return connection
 
 
-def record_generation(workspace, variants, context_message_id, model, trigger_text=""):
+def record_generation(workspace, variants, context_message_id, model, trigger_text="",
+                      request_snapshot=None, decision=None):
     """Persist candidates before the control bot presents them to the owner."""
-    if not variants:
+    if not variants and (not decision or decision.get('action') not in {'wait', 'ask_owner'}):
         raise ValueError("No generated variants to record")
     generation_id = str(uuid4())
     candidates = [
@@ -105,7 +118,54 @@ def record_generation(workspace, variants, context_message_id, model, trigger_te
                 "INSERT INTO generation_context VALUES (?, ?)",
                 (generation_id, trigger_text[:2000]),
             )
+            if request_snapshot is not None or decision is not None:
+                connection.execute("INSERT INTO generation_evidence VALUES (?, ?, ?)", (
+                    generation_id, json.dumps(request_snapshot or {}, ensure_ascii=False),
+                    json.dumps(decision or {}, ensure_ascii=False)))
     return generation_id
+
+
+def get_generation_evidence(workspace, generation_id):
+    if not workspace.reply_journal.exists():
+        return None
+    with closing(_open(workspace)) as connection:
+        row = connection.execute(
+            'SELECT e.request_json, e.decision_json FROM generation_evidence e '
+            'JOIN generations g ON g.generation_id=e.generation_id '
+            'WHERE g.generation_id=? AND g.account_id=? AND g.dialog_id=?',
+            (generation_id, workspace.account_id, workspace.dialog_id)).fetchone()
+    return {'request': json.loads(row[0]), 'decision': json.loads(row[1])} if row else None
+
+
+REVIEW_LABELS = {
+    'good': 'Подходит', 'tactic': 'Не та реакция',
+    'style': 'Не мой стиль', 'facts': 'Выдуманы факты',
+}
+
+
+def review_generation(workspace, generation_id, rating):
+    if rating not in REVIEW_LABELS:
+        raise ValueError('Неизвестная оценка.')
+    if get_generation(workspace, generation_id) is None:
+        raise ValueError('Откройте исходный диалог, чтобы оценить решение.')
+    with closing(_open(workspace)) as connection:
+        with connection:
+            connection.execute(
+                'INSERT INTO generation_reviews VALUES (?, ?, ?) '
+                'ON CONFLICT(generation_id) DO UPDATE SET '
+                'rating=excluded.rating, reviewed_at=excluded.reviewed_at',
+                (generation_id, rating, datetime.now(timezone.utc).isoformat()))
+
+
+def review_counts(workspace):
+    if not workspace.reply_journal.exists():
+        return {}
+    with closing(_open(workspace)) as connection:
+        return dict(connection.execute(
+            'SELECT r.rating, COUNT(*) FROM generation_reviews r '
+            'JOIN generations g ON r.generation_id=g.generation_id '
+            'WHERE g.account_id=? AND g.dialog_id=? GROUP BY r.rating',
+            (workspace.account_id, workspace.dialog_id)).fetchall())
 
 
 def finalized_correction_candidates(workspace, limit=80):
@@ -123,6 +183,8 @@ def finalized_correction_candidates(workspace, limit=80):
             "WHERE d.account_id=? AND d.dialog_id=? AND f.status='finalized' "
             "AND f.result IN ('accepted_with_edit', 'accepted_without_edit') "
             "AND c.trigger_text != '' "
+            "AND NOT EXISTS (SELECT 1 FROM generation_reviews r "
+            "WHERE r.generation_id=d.generation_id AND r.rating != 'good') "
             "ORDER BY f.finalized_at DESC LIMIT ?",
             (workspace.account_id, workspace.dialog_id, limit),
         ).fetchall()

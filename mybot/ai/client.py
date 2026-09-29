@@ -17,47 +17,9 @@ async def test_ai_connection():
     return response.output_text
 
 
-async def generate_answers(ai_request):
-    response = await ai_client.responses.create(
-        model=Config.OPENAI_MODEL,
-
-        instructions=(
-            "Ты составляешь ответы для переписки "
-            "в Telegram. "
-            "Используй предоставленный текущий диалог, "
-            "релевантную долговременную память и "
-            "исторические примеры реальных ответов "
-            "пользователя. "
-            "Текущий диалог и прямое указание пользователя "
-            "имеют наивысший приоритет. "
-            "Верни ровно три разных варианта ответа. "
-            "Верни только JSON-объект с ключом variants: массив ровно из трёх строк. "
-            "Каждый элемент массива — один полный вариант ответа; не объединяй варианты "
-            "в одной строке. Не добавляй анализ, вступление или пояснения."
-        ),
-
-        input=ai_request,
-
-        max_output_tokens=1000,
-
-        store=False
-    )
-
-    print("\nИспользование финальной модели:")
-    print(
-        f"Input tokens: "
-        f"{response.usage.input_tokens}"
-    )
-    print(
-        f"Output tokens: "
-        f"{response.usage.output_tokens}"
-    )
-    print(
-        f"Total tokens: "
-        f"{response.usage.total_tokens}"
-    )
-
-    return response.output_text
+async def generate_answers(ai_request, *, allow_decision=False):
+    from mybot.ai.reply_provider import generate_reply
+    return await generate_reply(ai_request, ai_client, allow_decision=allow_decision)
 
 
 async def analyze_full_history(history_part):

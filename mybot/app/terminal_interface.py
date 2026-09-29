@@ -155,13 +155,14 @@ class TerminalInterface:
 
             return
 
-        print(
-            "\nВАРИАНТЫ ОТВЕТА:\n"
-        )
-
-        print(
-            answers
-        )
+        decision = self.reply_service.last_decision
+        if decision:
+            print(f"\n{decision['action']}: {decision['tactic']}\n{decision['owner_note']}")
+            if decision['action'] != 'reply':
+                return
+            print('\n\n'.join(decision['variants']))
+        else:
+            print('\nВАРИАНТЫ ОТВЕТА:\n' + answers)
 
 
     async def run(self):

@@ -27,8 +27,18 @@ from mybot.telegram.bot_panel import BotPanel
 from mybot.telegram.bot_callbacks import BotCallbacks
 from mybot.telegram.bot_menu import BotMenu
 from mybot.telegram.bot_operations import active_operation
+from mybot.services.history_search import search_history
+from mybot.services.random_fact import RandomFactService
 from mybot.telegram.bot_reply_actions import BotReplyActions, variants_markup, variants_text
 from mybot.telegram.bot_feedback import BotFeedback
+from mybot.telegram.bot_benchmark import BotBenchmark, clear_benchmark_input, button as benchmark_button
+from mybot.storage.search_benchmark import BenchmarkStore
+from mybot.storage.atomic import durable_call
+from mybot.telegram.bot_goal import BotGoal
+from mybot.telegram.bot_behavior import BotBehavior
+from mybot.ai.reply_provider import reply_model
+from mybot.telegram.bot_reply_review import review_markup
+from mybot.telegram.bot_reply_practice import BotReplyPractice
 
 
 class BotInterface:
@@ -71,6 +81,11 @@ class BotInterface:
         self.panel = BotPanel(self)
         self.runtime_controller = None
         self.control_bot_id = None
+        self.random_facts = RandomFactService()
+        self.benchmark = BotBenchmark(self)
+        self.goal = BotGoal(self)
+        self.behavior = BotBehavior(self)
+        self.reply_practice = BotReplyPractice(self)
 
 
     def is_owner(
@@ -155,7 +170,10 @@ class BotInterface:
     async def start_command(self, update, context):
         if not self.is_owner(update):
             return
+        clear_benchmark_input(context)
         context.user_data.pop("awaiting_mood", None)
+        context.user_data.pop("awaiting_goal", None)
+        context.user_data.pop("awaiting_behavior", None)
         context.user_data.pop("pending_reply_edit", None)
         await self.panel.show()
         await self.menu.move_to_bottom()
@@ -218,19 +236,22 @@ class BotInterface:
         await self.callbacks.show_dialogs(update.effective_message, context, "ui:dialogs:0")
 
 
-    async def mood_command(self, update, context):
+    async def goal_command(self, update, context):
         if not self.is_owner(update):
             return
+        clear_benchmark_input(context)
+        for key in ('awaiting_mood', 'awaiting_history_search', 'awaiting_reply_instruction', 'pending_reply_edit'):
+            context.user_data.pop(key, None)
         if context.args:
-            self.state.current_mood = " ".join(context.args).strip()
-        await self.callbacks.show(update.effective_message,
-            f"Настроение: {self.state.current_mood or 'не задано'}")
+            await self.goal.handle('ui:goal:write', update, context, text=' '.join(context.args))
+        else:
+            await self.goal.handle('ui:goal', update, context)
 
-    async def clear_mood_command(self, update, context):
+    async def clear_goal_command(self, update, context):
         if not self.is_owner(update):
             return
-        self.state.current_mood = None
-        await self.callbacks.show(update.effective_message, "Настроение сброшено.")
+        action = f'ui:goal:clear:{self.workspace.dialog_id}' if self.workspace else 'ui:goal'
+        await self.callbacks.dispatch(action, update, context)
 
 
     @active_operation
@@ -249,9 +270,7 @@ class BotInterface:
         try:
             answers = (
                 await self.reply_service.generate(
-                    instruction=instruction,
-                    current_mood=
-                        self.state.current_mood
+                    instruction=instruction
                 )
             )
 
@@ -260,12 +279,13 @@ class BotInterface:
 
             return
 
-        variants = (
-            self.reply_service.split_variants(
-                answers
-            )
-        )
-        if len(variants) != 3:
+        decision = getattr(self.reply_service, 'last_decision', None)
+        try:
+            variants = self.reply_service.split_variants(answers)
+        except ValueError as error:
+            await self.callbacks.show(update.effective_message, str(error))
+            return
+        if len(variants) != 3 and not (decision and decision['action'] in {'wait', 'ask_owner'}):
             await self.callbacks.show(update.effective_message,
                 "Не удалось получить три отдельных варианта. Нажмите «Ответ» ещё раз.")
             return
@@ -275,8 +295,10 @@ class BotInterface:
         try:
             generation_id = record_generation(self.workspace, variants,
                               self.reply_service.last_context_message_id,
-                              Config.OPENAI_MODEL,
-                              getattr(self.reply_service, "last_trigger_text", ""))
+                              reply_model(),
+                              getattr(self.reply_service, "last_trigger_text", ""),
+                              request_snapshot=getattr(self.reply_service, 'last_request_snapshot', None),
+                              decision=decision)
         except Exception:
             logging.exception("Не удалось сохранить варианты в журнале диалога")
             journal_warning = (
@@ -286,6 +308,15 @@ class BotInterface:
 
         if journal_warning:
             await self.send_long_text(update.effective_message, journal_warning)
+        if decision:
+            labels = {'reply': 'Ответить', 'wait': 'Подождать', 'ask_owner': 'Нужно ваше решение'}
+            summary = f"{labels[decision['action']]} · {decision['tactic']}"
+            if decision['owner_note']:
+                summary += '\n' + decision['owner_note']
+            await self.send_long_text(update.effective_message, summary,
+                reply_markup=review_markup(generation_id) if generation_id else None)
+            if decision['action'] != 'reply':
+                return
         text = variants_text(variants)
         await self.send_long_text(update.effective_message, text,
             reply_markup=variants_markup(generation_id) if generation_id else None)
@@ -328,19 +359,103 @@ class BotInterface:
             except TelegramError:
                 pass
             return
-        if context.user_data.pop("awaiting_mood", False):
-            self.state.current_mood = instruction
-            await self.callbacks.show(update.effective_message, f"Настроение установлено:\n{instruction}")
+        if await self.benchmark.handle_text(instruction, update, context):
+            return
+        if await self.behavior.handle_text(instruction, update, context):
+            return
+        if await self.goal.handle_text(instruction, update, context):
+            return
+
+        search_dialog_id = context.user_data.pop("awaiting_history_search", None)
+        if search_dialog_id is not None:
+            if self.workspace is None or search_dialog_id != self.workspace.dialog_id:
+                await self.callbacks.show(update.effective_message,
+                                          "Диалог изменился. Откройте поиск ещё раз.")
+                return
+            await self.answer_history_question(update, instruction)
+            return
+
+        reply_dialog_id = context.user_data.pop("awaiting_reply_instruction", None)
+        if reply_dialog_id is not None:
+            if self.workspace is None or reply_dialog_id != self.workspace.dialog_id:
+                await self.callbacks.show(update.effective_message,
+                                          "Диалог изменился. Нажмите «Указания» ещё раз.")
+                return
+            await self.send_generated_answers(update, instruction)
             return
 
         if await self.reply_actions.handle_text(instruction, context):
             return
 
-        await self.send_generated_answers(
-            update,
-            instruction
-        )
+        await self.callbacks.show(update.effective_message,
+            "Текст получен. Для вариантов ответа нажмите «✍️ Ответ». "
+            "Чтобы дать указания модели, сначала нажмите «📝 Указания». "
+            "Для вопроса по переписке используйте «🔎 История».")
 
+    async def search_command(self, update, context):
+        if not self.is_owner(update):
+            return
+        question = " ".join(context.args).strip()
+        if question:
+            await self.answer_history_question(update, question)
+        else:
+            await self.callbacks.dispatch("ui:history_search", update, context)
+
+    @active_operation
+    async def answer_history_question(self, update, question):
+        await self.callbacks.show(update.effective_message, "Ищу подтверждение во всей сохранённой истории диалога…")
+        try:
+            answer = await search_history(self.workspace, question)
+        except ValueError as error:
+            answer = str(error)
+        except Exception:
+            logging.exception("Не удалось выполнить поиск по истории")
+            answer = "Поиск не удался. История не изменена; попробуйте повторить вопрос позже."
+        await self.send_long_text(update.effective_message, answer)
+
+
+    @active_operation
+    async def random_fact_command(self, update, expected_dialog=None):
+        workspace = self.workspace
+        if expected_dialog is not None and expected_dialog != str(workspace.dialog_id):
+            await self.callbacks.show(update.effective_message,
+                                      "Откройте исходный диалог или нажмите «Случайный факт» в текущем меню.")
+            return
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🎲 Ещё факт", callback_data=f"ui:random_fact:{workspace.dialog_id}")],
+            [InlineKeyboardButton("🏠 Главное меню", callback_data="ui:home")],
+        ])
+        await self.callbacks.show(update.effective_message, "Ищу случайный факт · эксперимент…")
+        try:
+            fact = await self.random_facts.extract(workspace)
+        except ValueError as error:
+            await self.callbacks.show(update.effective_message, str(error), markup)
+            return
+        except Exception:
+            logging.exception("Не удалось извлечь случайный факт")
+            await self.callbacks.show(update.effective_message,
+                "Не удалось получить факт. Попробуйте позже кнопкой «Ещё факт».", markup)
+            return
+        if fact is None:
+            await self.callbacks.show(update.effective_message,
+                "В выбранных фрагментах не нашёл нового подтверждённого факта о собеседнике. "
+                "Это не означает, что фактов нет во всей истории.", markup)
+            return
+        await self.callbacks.show(update.effective_message, "Факт найден · эксперимент", markup)
+        try:
+            fact_id = await durable_call(BenchmarkStore(workspace).save_fact, fact)
+        except Exception:
+            logging.exception("Не удалось сохранить факт для проверочного набора")
+            await self.callbacks.show(update.effective_message,
+                "Факт найден, но не сохранён для проверочного набора. Повторите запрос позже.", markup)
+        else:
+            markup = InlineKeyboardMarkup([
+                [benchmark_button("✅ В проверку", 'add', workspace, fact_id)],
+                *markup.inline_keyboard,
+            ])
+        await self.send_long_text(update.effective_message, fact.format(workspace.dialog_name),
+                                  reply_markup=markup)
+        self.random_facts.remember(workspace, fact)
 
     async def update_memory_command(self, update, context):
         if not self.is_owner(update):
@@ -465,6 +580,8 @@ class BotInterface:
             )
         )
 
+        self.application.add_handler(CommandHandler("search", self.search_command))
+
         self.application.add_handler(
             CommandHandler(
                 "reply",
@@ -474,15 +591,15 @@ class BotInterface:
 
         self.application.add_handler(
             CommandHandler(
-                "mood",
-                self.mood_command
+                "goal",
+                self.goal_command
             )
         )
 
         self.application.add_handler(
             CommandHandler(
-                "clear_mood",
-                self.clear_mood_command
+                "clear_goal",
+                self.clear_goal_command
             )
         )
 

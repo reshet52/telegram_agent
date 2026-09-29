@@ -7,6 +7,9 @@ from mybot.ai.context_builder import (
     build_ai_request, get_current_incoming
 )
 from mybot.config import Config
+from mybot.ai.reply_contract import parse_decision
+from mybot.ai.reply_provider import request_snapshot
+from mybot.storage.atomic import write_text
 
 
 DEFAULT_INSTRUCTION = (
@@ -31,6 +34,8 @@ class ReplyService:
         self.workspace = workspace
         self.last_context_message_id = None
         self.last_trigger_text = ""
+        self.last_decision = None
+        self.last_request_snapshot = None
 
         self.generation_lock = (
             asyncio.Lock()
@@ -74,7 +79,8 @@ class ReplyService:
     async def generate(
         self,
         instruction=None,
-        current_mood=None
+        current_mood=None,
+        allow_decision=False,
     ):
         if not instruction:
             instruction = (
@@ -90,14 +96,15 @@ class ReplyService:
             self.recent_messages
         )
 
-        self.last_context_message_id = max(
-            (item.get("message_id") for item in messages_snapshot
-             if item.get("message_id") is not None), default=None)
-        self.last_trigger_text = "\n".join(
-            item.get("text") or "" for item in get_current_incoming(messages_snapshot)
-            if item.get("text"))[:2000]
-
         async with self.generation_lock:
+            self.last_decision = None
+            self.last_request_snapshot = None
+            self.last_context_message_id = max(
+                (item.get("message_id") for item in messages_snapshot
+                 if item.get("message_id") is not None), default=None)
+            self.last_trigger_text = "\n".join(
+                item.get("text") or "" for item in get_current_incoming(messages_snapshot)
+                if item.get("text"))[:2000]
             ai_request = (
                 await build_ai_request(
                     messages_snapshot,
@@ -125,26 +132,31 @@ class ReplyService:
                 exist_ok=True
             )
 
-            with open(
-                preview_path,
-                "w",
-                encoding="utf-8"
-            ) as file:
-                file.write(
-                    ai_request
-                )
+            snapshot = request_snapshot(ai_request, allow_decision=allow_decision)
+            snapshot['context_message_id'] = self.last_context_message_id
+            snapshot['context_message_ids'] = [m['message_id'] for m in messages_snapshot
+                                                if m.get('message_id') is not None]
+            write_text(preview_path, json.dumps(snapshot, ensure_ascii=False, indent=2))
 
             answers = (
                 await generate_answers(
-                    ai_request
+                    ai_request, allow_decision=allow_decision,
                 )
             )
+            self.last_decision = parse_decision(answers)
+            if not allow_decision and self.last_decision and self.last_decision['action'] != 'reply':
+                self.last_decision = None
+                raise ValueError('Модель не вернула запрошенные варианты ответа. Повторите запрос.')
+            self.last_request_snapshot = snapshot
 
         return answers
 
 
     @staticmethod
     def split_variants(text):
+        decision = parse_decision(text)
+        if decision is not None:
+            return decision['variants']
         try:
             parsed = json.loads(text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip())
             if isinstance(parsed, dict):

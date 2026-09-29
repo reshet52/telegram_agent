@@ -16,13 +16,15 @@ from mybot.services.runtime_controller import RuntimeController
 from mybot.storage.control_state import ControlState
 from mybot.telegram.bot_interface import BotInterface
 from mybot.telegram.bot_keyboards import home_menu
+from mybot.telegram.bot_benchmark import clear_benchmark_input
 
 
 COMMANDS = {
     "start": "start_command", "status": "status_command", "style": "style_command",
     "panel": "panel_command", "dialogs": "dialogs_command", "select": "select_dialog_command",
-    "show": "show_command", "reply": "reply_command", "mood": "mood_command",
-    "clear_mood": "clear_mood_command", "update_memory": "update_memory_command",
+    "show": "show_command", "reply": "reply_command", "search": "search_command",
+    "goal": "goal_command",
+    "clear_goal": "clear_goal_command", "update_memory": "update_memory_command",
 }
 
 
@@ -52,6 +54,9 @@ class AccountBot:
             owner = self._owner(update)
             if owner is None:
                 return
+            clear_benchmark_input(context)
+            context.user_data.pop('awaiting_goal', None)
+            context.user_data.pop('awaiting_behavior', None)
             interface = self.interfaces.get(owner)
             if not interface:
                 await self._login_screen(owner)
@@ -209,7 +214,8 @@ class AccountBot:
         await self.application.bot.set_my_commands([
             BotCommand("start", "Пульт управления"), BotCommand("dialogs", "Выбрать диалог"),
             BotCommand("reply", "Предложить ответ"), BotCommand("status", "Прогресс подготовки"),
-            BotCommand("panel", "Показать пульт")])
+            BotCommand("panel", "Показать пульт"), BotCommand("search", "Поиск по истории"),
+            BotCommand("goal", "Цель диалога"), BotCommand("clear_goal", "Сбросить цель")])
         await self.application.updater.start_polling()
         await self.application.start()
         for owner in self.credentials:

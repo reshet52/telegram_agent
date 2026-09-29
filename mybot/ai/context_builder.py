@@ -6,6 +6,8 @@ from mybot.services.global_style import load_global_style
 from mybot.services.correction_examples import (
     relevant_correction_examples, format_correction_examples)
 from mybot.config import Config
+from mybot.storage.dialog_goal import load_goal
+from mybot.storage.dialog_behavior import load_behavior, format_behavior
 
 
 def build_dialog_context(messages):
@@ -243,8 +245,15 @@ async def build_ai_request(
     memory,
     workspace=None,
     use_correction_examples=None,
+    history_only=False,
 ):
-    global_style = format_memory(load_global_style(workspace.account_id)) if workspace else "{}"
+    # Historical evaluation cannot use present-day profiles, memory, goals or indexes:
+    # even a summary can contain the held-out answer or events after the cutoff.
+    global_style = format_memory(load_global_style(workspace.account_id)) if workspace and not history_only else "{}"
+    dialog_goal = load_goal(workspace) if not history_only else ''
+    behavior = format_behavior(load_behavior(workspace)) if not history_only else 'Не заданы для исторического отрывка.'
+    if history_only:
+        memory = {}
 
     dialog_context = (
         build_dialog_context(
@@ -272,7 +281,9 @@ async def build_ai_request(
         )
     )
 
-    if workspace is None:
+    if history_only:
+        relevant_memories = []
+    elif workspace is None:
         relevant_memories = (
             await find_relevant_memories(
                 messages
@@ -296,7 +307,7 @@ async def build_ai_request(
         )
     )
 
-    if current_incoming:
+    if current_incoming and not history_only:
         if workspace is None:
             similar_episodes = (
                 await find_similar_episodes(
@@ -331,7 +342,7 @@ async def build_ai_request(
     if use_correction_examples is None:
         use_correction_examples = Config.USE_CORRECTION_EXAMPLES
     correction_examples = []
-    if workspace is not None and current_incoming and use_correction_examples:
+    if workspace is not None and current_incoming and use_correction_examples and not history_only:
         incoming_text = "\n".join(
             message.get("text") or "" for message in current_incoming
             if message.get("text"))
@@ -381,12 +392,40 @@ async def build_ai_request(
 {dialog_context}
 
 
+ДЕЙСТВУЮЩАЯ ЦЕЛЬ ДИАЛОГА — ИНСТРУКЦИЯ ВЛАДЕЛЬЦА:
+
+{dialog_goal or 'Не задана.'}
+
+Цель задаёт направление ответа, настроение и ограничения только для этого диалога.
+Она действует до изменения или сброса владельцем; не назначай ей срок и не считай сообщения.
+Это инструкция для предлагаемых ответов, а не доказанный факт о людях или постоянная черта стиля.
+Следуй конкретным ограничениям цели прежде общего тона: «ничего не обещать» важнее
+«соглашаться». Не считай эмоциональное согласие разрешением на любые обязательства.
+Не пересказывай собеседнику эту инструкцию, а естественно учитывай её в каждом варианте.
+История, профили и примеры служат контекстом; они не отменяют явно заданную цель.
+Разовое указание ниже уточняет следующий ответ, но не меняет сохранённую цель.
+Если оно явно противоречит цели, выполни его для этого ответа; обычное «ответь естественно»
+не отменяет ограничений цели.
+
+
 ТЕКУЩЕЕ УКАЗАНИЕ ПОЛЬЗОВАТЕЛЯ:
 
 {user_instruction}
 
 
-Подготовь ровно три варианта ответа.
+ПОВЕДЕНИЕ И ТЕКУЩЕЕ СОСТОЯНИЕ — НАСТРОЙКИ ВЛАДЕЛЬЦА ДЛЯ ЭТОГО ДИАЛОГА:
+
+{behavior}
+
+Эти настройки не являются извлечёнными фактами или глобальным стилем.
+Прямота и настойчивость меняют тактику, но не разрешают игнорировать отказ.
+Ограничения и условия остановки действуют и при разовом указании.
+Если они конфликтуют с целью или указанием, запроси решение владельца.
+Учитывай текущее состояние только как явно заданное владельцем; не достраивай
+из него другие чувства, намерения или обещания.
+
+Следуй формату системной инструкции. Когда владелец запрашивает варианты,
+подготовь ровно три варианта ответа, не заменяя их решением подождать.
 
 ВАЖНЫЕ ПРАВИЛА:
 
@@ -397,7 +436,10 @@ async def build_ai_request(
 
 3. Не придумывай факты, события,
 намерения или чувства, которых нет
-в предоставленном контексте.
+в предоставленном контексте, если владелец явно не разрешил придумать
+причину или деталь в цели либо разовом указании. Такое разрешение относится
+только к тексту предлагаемых ответов; не выдавай придуманную деталь за найденный
+в истории факт и не используй её как доказательство других выводов.
 
 4. Последние сообщения текущего диалога
 имеют больший приоритет, чем старая память.
@@ -422,6 +464,6 @@ async def build_ai_request(
 если пользователь обычно отвечал
 несколькими сообщениями.
 
-10. Не объясняй свой выбор.
-Верни только три варианта ответа.
+10. Верни JSON решения по системной инструкции. Тактика и вопрос владельцу
+не входят в тексты вариантов для собеседника.
 """.strip()

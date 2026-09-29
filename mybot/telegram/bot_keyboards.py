@@ -10,9 +10,14 @@ def main_menu(active=False, panel_hidden=False):
     if active:
         rows = [
             [InlineKeyboardButton("✍️ Ответ", callback_data="ui:reply"),
+             InlineKeyboardButton("📝 Указания для ответа", callback_data="ui:reply_instruction")],
+            [InlineKeyboardButton("🔎 Поиск по истории", callback_data="ui:history_search"),
              InlineKeyboardButton("📖 Контекст", callback_data="ui:context")],
-            [InlineKeyboardButton("🎭 Настроение", callback_data="ui:mood"),
+            [InlineKeyboardButton("🎯 Цель диалога", callback_data="ui:goal"),
              InlineKeyboardButton("🧠 Память", callback_data="ui:memory")],
+            [InlineKeyboardButton("🎲 Случайный факт", callback_data="ui:random_fact"),
+             InlineKeyboardButton("🧪 Проверка поиска", callback_data="ui:benchmark")],
+            [InlineKeyboardButton("🎓 Тренировка на истории", callback_data="ui:practice")],
             [InlineKeyboardButton("🔄 Обновить историю и завершить", callback_data="ui:finish_dialog")],
             [InlineKeyboardButton("⬅️ Выйти из диалога", callback_data="ui:leave")],
         ]
@@ -57,14 +62,16 @@ def dialogs_menu(dialogs, page):
 
 PANEL_ACTIONS = {
     "💬 Диалоги": "ui:dialogs:0", "✍️ Ответ": "ui:reply",
-    "📖 Контекст": "ui:context",
+    "📝 Указания": "ui:reply_instruction",
+    "📖 Контекст": "ui:context", "🔎 История": "ui:history_search",
     "🏠 Меню": "ui:home", "🫥 Скрыть пульт": "ui:panel_hide",
 }
 
 
 def control_panel(active=False):
-    labels = (["✍️ Ответ", "📖 Контекст", "🏠 Меню", "🫥 Скрыть пульт"]
+    labels = (["✍️ Ответ", "📝 Указания", "📖 Контекст", "🔎 История",
+               "🏠 Меню", "🫥 Скрыть пульт"]
               if active else ["💬 Диалоги", "🏠 Меню", "🫥 Скрыть пульт"])
     return ReplyKeyboardMarkup([labels[i:i + 2] for i in range(0, len(labels), 2)],
                                resize_keyboard=True, is_persistent=True,
-                               input_field_placeholder="Инструкция для ответа или кнопка пульта")
+                               input_field_placeholder="Выберите действие на пульте")

@@ -15,6 +15,10 @@ class Config:
 
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
     OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-6-luna")
+    REPLY_PROVIDER = os.getenv("REPLY_PROVIDER", "openai").strip().lower()
+    REPLY_MODEL = os.getenv("REPLY_MODEL", "").strip()
+    REPLY_BASE_URL = os.getenv("REPLY_BASE_URL", "").strip()
+    REPLY_API_KEY = os.getenv("REPLY_API_KEY", "")
     USE_CORRECTION_EXAMPLES = os.getenv(
         "USE_CORRECTION_EXAMPLES", "true").strip().lower() in {"1", "true", "yes", "on"}
 

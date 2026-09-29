@@ -19,11 +19,19 @@ class ModelTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(config.OPENAI_MODEL, 'gpt-6-luna')
             self.assertEqual(config.ANALYSIS_MODEL, 'gpt-6-luna')
             self.assertEqual(config.EMBEDDING_MODEL, 'text-embedding-3-small')
+            self.assertEqual(config.REPLY_PROVIDER, 'openai')
+            self.assertEqual(config.REPLY_MODEL, '')
             os.environ['OPENAI_MODEL'] = 'custom-reply'
             os.environ['ANALYSIS_MODEL'] = 'custom-analysis'
+            os.environ['REPLY_PROVIDER'] = 'compatible'
+            os.environ['REPLY_MODEL'] = 'local-model'
+            os.environ['REPLY_BASE_URL'] = 'http://localhost:8000/v1'
             config = runpy.run_path(str(path))['Config']
             self.assertEqual(config.OPENAI_MODEL, 'custom-reply')
             self.assertEqual(config.ANALYSIS_MODEL, 'custom-analysis')
+            self.assertEqual(config.REPLY_PROVIDER, 'compatible')
+            self.assertEqual(config.REPLY_MODEL, 'local-model')
+            self.assertEqual(config.REPLY_BASE_URL, 'http://localhost:8000/v1')
 
     async def test_reply_and_analysis_request_models(self):
         response = NS(output_text='{}', usage=NS(input_tokens=1, output_tokens=1, total_tokens=2))

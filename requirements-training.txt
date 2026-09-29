@@ -1,0 +1,5 @@
+# Optional: install into a separate training environment, not the Telegram runtime.
+# The runner follows the TRL 0.29.0 SFTTrainer interface.
+trl==0.29.0
+peft
+torch
