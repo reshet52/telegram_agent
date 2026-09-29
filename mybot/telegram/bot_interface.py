@@ -174,6 +174,7 @@ class BotInterface:
         context.user_data.pop("awaiting_mood", None)
         context.user_data.pop("awaiting_goal", None)
         context.user_data.pop("awaiting_behavior", None)
+        context.user_data.pop('practice_correction', None)
         context.user_data.pop("pending_reply_edit", None)
         await self.panel.show()
         await self.menu.move_to_bottom()
@@ -358,6 +359,8 @@ class BotInterface:
                 await update.effective_message.delete()
             except TelegramError:
                 pass
+            return
+        if await self.reply_practice.handle_text(instruction, update, context):
             return
         if await self.benchmark.handle_text(instruction, update, context):
             return

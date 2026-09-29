@@ -30,6 +30,8 @@ class BotCallbacks:
         if message is None:
             return
         bot = self.interface
+        if not action.startswith('ui:rp:correct:'):
+            context.user_data.pop('practice_correction', None)
         if action != 'ui:benchmark' and not action.startswith('ui:bm:'):
             clear_benchmark_input(context)
         if not action.startswith("ui:activate:"):

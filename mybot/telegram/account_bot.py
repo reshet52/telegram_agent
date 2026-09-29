@@ -57,6 +57,7 @@ class AccountBot:
             clear_benchmark_input(context)
             context.user_data.pop('awaiting_goal', None)
             context.user_data.pop('awaiting_behavior', None)
+            context.user_data.pop('practice_correction', None)
             interface = self.interfaces.get(owner)
             if not interface:
                 await self._login_screen(owner)

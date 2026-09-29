@@ -4,6 +4,7 @@ import json
 import re
 
 from mybot.storage.reply_journal import finalized_correction_candidates
+from mybot.services.practice_learning import confirmed_examples
 
 
 MAX_EXAMPLES = 3
@@ -29,7 +30,8 @@ def relevant_correction_examples(workspace, current_incoming,
     if not query or limit <= 0 or max_chars <= 0:
         return []
     ranked = []
-    for index, item in enumerate(finalized_correction_candidates(workspace)):
+    candidates = finalized_correction_candidates(workspace) + confirmed_examples(workspace)
+    for index, item in enumerate(candidates):
         terms = _terms(item['trigger_text'])
         shared = query & terms
         if not shared:
@@ -46,6 +48,7 @@ def relevant_correction_examples(workspace, current_incoming,
             'incoming': item['trigger_text'][:MAX_FIELD_CHARS],
             'ai_variant': item['original_text'][:MAX_FIELD_CHARS],
             'actual_reply': item['actual_text'][:MAX_FIELD_CHARS],
+            'source_kind': item.get('source_kind', 'confirmed_sent_reply'),
         }
         size = len(json.dumps(example, ensure_ascii=False))
         if used + size > max_chars:

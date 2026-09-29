@@ -100,12 +100,12 @@ class BotMenu:
                 if isinstance(data, bytes) and data.startswith((
                         b"ui:rv:", b"ui:rve:", b"ui:draft:", b"ui:db:",
                         b"ui:unreject:", b"ui:fb:", b"ui:rr:", b"ui:rp:rate:",
-                        b"ui:rp:run:", b"ui:rp:reveal:", b"ui:bm:add:", b"ui:bm:rate_")):
+                        b"ui:rp:run:", b"ui:rp:reveal:", b"ui:rp:view:", b"ui:bm:add:", b"ui:bm:rate_")):
                     return True
                 if isinstance(data, str) and data.startswith((
                         "ui:rv:", "ui:rve:", "ui:draft:", "ui:db:",
                         "ui:unreject:", "ui:fb:", "ui:rr:", "ui:rp:rate:",
-                        "ui:rp:run:", "ui:rp:reveal:", "ui:bm:add:", "ui:bm:rate_")):
+                        "ui:rp:run:", "ui:rp:reveal:", "ui:rp:view:", "ui:bm:add:", "ui:bm:rate_")):
                     return True
         return False
 

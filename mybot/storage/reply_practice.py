@@ -117,9 +117,11 @@ class PracticeStore:
         write_json(self.path(case['id']), case)
         return case
 
-    def source(self, case):
-        messages = {m['message_id']: m for m in self.history()}
-        deleted = load_deleted_message_ids(self.workspace.deleted_message_ids)
+    def source(self, case, *, messages=None, deleted=None):
+        if messages is None:
+            messages = {m['message_id']: m for m in self.history()}
+        if deleted is None:
+            deleted = load_deleted_message_ids(self.workspace.deleted_message_ids)
         ids = case['context_ids'] + case['expected_ids']
         if any(key not in messages or key in deleted for key in ids):
             raise ValueError('Источник удалён или отсутствует. Этот отрывок больше недоступен.')
@@ -155,6 +157,8 @@ class PracticeStore:
             raise ValueError('Оценка или вариант недоступны.')
         case['ratings'][str(number)] = {'rating': rating, 'at': now(),
                                        'after_reveal': bool(case['revealed_at'])}
+        if rating == 'good':
+            case['learning_disabled'] = False
         write_json(self.path(key), case)
         return case
 
@@ -166,4 +170,38 @@ class PracticeStore:
         if not case['revealed_at']:
             case['revealed_at'] = now()
             write_json(self.path(key), case)
+        return case
+
+    def use_original(self, key, enabled):
+        case = self.get(key)
+        self.source(case)
+        if not case.get('revealed_at'):
+            raise ValueError('Сначала откройте свой настоящий ответ.')
+        case['use_original'] = bool(enabled)
+        if enabled:
+            case['learning_disabled'] = False
+        case['learning_updated_at'] = now()
+        write_json(self.path(key), case)
+        return case
+
+    def save_correction(self, key, text):
+        case = self.get(key)
+        self.source(case)
+        if not case['variants']:
+            raise ValueError('Сначала получите варианты.')
+        if not isinstance(text, str) or not 1 <= len(text.strip()) <= 3500:
+            raise ValueError('Напишите свой ответ от 1 до 3500 символов.')
+        case['owner_correction'] = {'text': text.strip(), 'at': now()}
+        case['learning_disabled'] = False
+        write_json(self.path(key), case)
+        return case
+
+    def clear_learning(self, key):
+        case = self.get(key)
+        self.source(case)
+        case['use_original'] = False
+        case['owner_correction'] = None
+        # Keep ratings as evaluation evidence, but explicitly disable their use.
+        case['learning_disabled'] = True
+        write_json(self.path(key), case)
         return case
