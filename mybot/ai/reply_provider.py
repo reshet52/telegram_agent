@@ -12,10 +12,17 @@ def reply_model():
     return Config.REPLY_MODEL or Config.OPENAI_MODEL
 
 
-def request_snapshot(prompt, *, allow_decision=False):
+def request_snapshot(prompt, *, allow_decision=False, count=3):
+    if count not in (1, 2, 3, 4):
+        raise ValueError("Количество вариантов должно быть от 1 до 4.")
+    if allow_decision and count != 3:
+        raise ValueError("Решения поддерживают прежний формат из трёх вариантов.")
+    instructions = REPLY_INSTRUCTIONS if allow_decision else VARIANT_INSTRUCTIONS
+    if count != 3:
+        instructions = instructions.replace("три", str(count)).replace('"...","...","..."', ",".join(['"..."'] * count))
     return {'provider': Config.REPLY_PROVIDER, 'model': reply_model(),
-            'instructions': REPLY_INSTRUCTIONS if allow_decision else VARIANT_INSTRUCTIONS, 'input': prompt,
-            'max_output_tokens': 1600}
+            'instructions': instructions, 'input': prompt,
+            'max_output_tokens': 1600, 'count': count}
 
 
 def report_usage(usage, compatible=False):
@@ -27,15 +34,27 @@ def report_usage(usage, compatible=False):
     print(f"Total tokens: {getattr(usage, 'total_tokens', None)}")
 
 
-async def generate_reply(prompt, default_client, *, allow_decision=False):
-    request = request_snapshot(prompt, allow_decision=allow_decision)
-    if Config.REPLY_PROVIDER == 'openai':
+async def generate_reply(prompt, default_client, *, allow_decision=False, count=3):
+    request = request_snapshot(prompt, allow_decision=allow_decision, count=count)
+    return await execute_request(request, default_client)
+
+
+def structured_request(instructions, payload, *, max_output_tokens=2200):
+    """Analysis/checking use the same configured reply provider and inspectable request."""
+    import json
+    return {'provider': Config.REPLY_PROVIDER, 'model': reply_model(),
+            'instructions': instructions, 'input': json.dumps(payload, ensure_ascii=False),
+            'max_output_tokens': max_output_tokens}
+
+
+async def execute_request(request, default_client):
+    if request['provider'] == 'openai':
         response = await default_client.responses.create(
             model=request['model'], instructions=request['instructions'],
-            input=prompt, max_output_tokens=request['max_output_tokens'], store=False)
+            input=request['input'], max_output_tokens=request['max_output_tokens'], store=False)
         report_usage(response.usage)
         return response.output_text
-    if Config.REPLY_PROVIDER != 'compatible':
+    if request['provider'] != 'compatible':
         raise ValueError('REPLY_PROVIDER должен быть openai или compatible.')
     url = urlparse(Config.REPLY_BASE_URL)
     if (url.scheme not in {'http', 'https'} or not url.hostname
@@ -50,7 +69,7 @@ async def generate_reply(prompt, default_client, *, allow_decision=False):
         response = await client.chat.completions.create(
             model=request['model'], messages=[
                 {'role': 'system', 'content': request['instructions']},
-                {'role': 'user', 'content': prompt}],
+                {'role': 'user', 'content': request['input']}],
             max_tokens=request['max_output_tokens'])
         if not response.choices or not response.choices[0].message.content:
             raise ValueError('Модель ответов не вернула текст.')

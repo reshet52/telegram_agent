@@ -1,7 +1,9 @@
 """Offline history finalization: no Telegram or OpenAI requests."""
 
+import asyncio
 import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace as NS
@@ -44,6 +46,84 @@ class CompactionTests(unittest.IsolatedAsyncioTestCase):
             {"category": "person_facts", "memory": "old", "embedding": [1]}]})
         write_lines(self.ws.memory_embeddings_live, [
             {"category": "person_facts", "memory": "new", "embedding": [2]}])
+
+    def controller(self):
+        state = ControlState(101)
+        state.set(active_dialog_id=201)
+        dialog = NS(id=201, name="First")
+        bot = NS(control_state=state, agent_manager=NS(selected_dialog=dialog),
+                 application=None, workspace=self.ws, recent_messages=[], reply_service=object())
+        controller = RuntimeController(Mock(), NS(id=101), bot)
+        controller.listener = NS(selected_dialog=dialog, unregister=AsyncMock(), register=Mock())
+        controller.runtime = NS(workspace=self.ws, raw_history=[], recent_messages=[],
+                                known_message_ids={1})
+        return controller
+
+    async def test_cancel_during_fetch_preserves_history_and_detaches_until_catchup(self):
+        self.populate()
+        before = self.ws.chat_history.read_bytes()
+        controller = self.controller()
+        listener = controller.listener
+        entered = asyncio.Event()
+        async def fetching(*args):
+            entered.set()
+            await asyncio.Event().wait()
+        with patch('mybot.services.runtime_controller.fetch_messages_after', side_effect=fetching), \
+             patch('mybot.services.runtime_controller.compact_workspace') as compact:
+            await controller.finish_dialog(AsyncMock())
+            await asyncio.wait_for(entered.wait(), 1)
+            await controller.pause()
+            compact.assert_not_called()
+        self.assertEqual(self.ws.chat_history.read_bytes(), before)
+        self.assertTrue(self.ws.episode_embeddings_live.read_text())
+        self.assertFalse(controller.busy)
+        self.assertIsNone(controller.runtime)
+        self.assertIsNone(ControlState(101).get('active_dialog_id'))
+        listener.register.assert_not_called()
+
+    async def test_cancel_before_task_starts_keeps_active_dialog(self):
+        self.populate()
+        controller = self.controller()
+        runtime = controller.runtime
+        await controller.finish_dialog(AsyncMock())
+        await controller.pause()
+        self.assertFalse(controller.busy)
+        self.assertIs(controller.runtime, runtime)
+        controller.listener.unregister.assert_not_awaited()
+
+    async def test_cancel_waits_for_atomic_history_commit(self):
+        self.populate()
+        controller = self.controller()
+        entered, release = threading.Event(), threading.Event()
+        def slow_commit(path, messages):
+            entered.set()
+            if not release.wait(timeout=5):
+                raise RuntimeError('Test commit was not released')
+            commit_batch(path, messages)
+        with patch('mybot.services.runtime_controller.fetch_messages_after',
+                   new=AsyncMock(return_value=[{'message_id': 2, 'sender': 'Other', 'text': 'new'}])), \
+             patch('mybot.services.runtime_controller.commit_history_batch', side_effect=slow_commit):
+            await controller.finish_dialog(AsyncMock())
+            try:
+                self.assertTrue(await asyncio.to_thread(entered.wait, 2))
+                pause = asyncio.create_task(controller.pause())
+                await asyncio.sleep(0)
+                self.assertFalse(pause.done())
+            finally:
+                release.set()
+            await pause
+        self.assertEqual([m['message_id'] for m in load_all_messages(
+            filename=self.ws.chat_history)], [1, 2])
+        self.assertIsNone(controller.runtime)
+        self.assertFalse(controller.busy)
+
+    async def test_missing_history_checkpoint_never_fetches_from_zero(self):
+        controller = self.controller()
+        with patch('mybot.services.runtime_controller.fetch_messages_after', new_callable=AsyncMock) as fetch:
+            with self.assertLogs(level='ERROR'):
+                await controller.finish_dialog(AsyncMock())
+                await controller.finish_task
+            fetch.assert_not_awaited()
 
     def test_merges_once_keeps_raw_history_and_other_account_untouched(self):
         self.populate()

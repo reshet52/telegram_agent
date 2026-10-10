@@ -14,7 +14,8 @@ from mybot.storage.control_state import ControlState
 from mybot.telegram.account_bot import AccountBot
 from mybot.telegram.bot_menu import BotMenu
 from mybot.telegram.bot_panel import BotPanel
-from telegram import InlineKeyboardMarkup
+from mybot.telegram.bot_interface import BotInterface
+from telegram import InlineKeyboardMarkup, ReplyKeyboardRemove
 from telegram.error import BadRequest
 
 
@@ -72,6 +73,22 @@ class AccountRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(panel.hidden)
         api.delete_message.assert_awaited_once_with(chat_id=11, message_id=55)
         self.assertEqual(ControlState(11).get("panel_message_id"), 56)
+        self.assertIsInstance(api.send_message.call_args.kwargs['reply_markup'], ReplyKeyboardRemove)
+
+    async def test_start_shows_only_two_keyboard_buttons_even_with_active_dialog(self):
+        api = NS(send_message=AsyncMock(return_value=NS(message_id=56)))
+        interface = NS(owner_id=11, control_state=None,
+                       application=NS(bot=api), workspace=object(),
+                       menu=NS(move_to_bottom=AsyncMock(), show=AsyncMock()),
+                       menu_title=lambda: 'AI Agent', is_owner=lambda update: True)
+        interface.panel = BotPanel(interface)
+        await BotInterface.start_command(interface, NS(effective_message=NS()),
+                                         NS(user_data={}))
+        interface.menu.move_to_bottom.assert_awaited_once()
+        interface.menu.show.assert_not_awaited()
+        markup = api.send_message.call_args.kwargs['reply_markup']
+        self.assertEqual([[button.text for button in row] for row in markup.keyboard],
+                         [['Ответ', 'Указания для ответа'], ['Выбор диалога', 'Обучение']])
 
     async def test_revoked_session_reuses_existing_login_menu(self):
         state = ControlState(11)

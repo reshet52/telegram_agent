@@ -154,6 +154,41 @@ class PreparationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(restarted.job['dialog_id'], 201)
         self.assertEqual(restarted.job['status'], 'paused')
 
+    async def test_pause_during_ai_request_stops_next_chunks_and_preserves_cache(self):
+        self.history()
+        history_before = self.ws.chat_history.read_bytes()
+        entered, cancelled = asyncio.Event(), asyncio.Event()
+        calls = 0
+        async def analyze(text):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return json.dumps({category: [] for category in CATEGORIES})
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+        bot = NS(agent_manager=NS(find_dialog=AsyncMock(return_value=NS(id=201))),
+                 control_bot_id=999, state=NS(), workspace=None,
+                 reply_service=None, recent_messages=[])
+        controller = RuntimeController(Mock(), NS(id=101), bot)
+        async def prepare(*args, **kwargs):
+            await WorkspaceInitializer(self.ws, kwargs['progress']).run()
+        with patch('mybot.services.runtime_controller.prepare_dialog_runtime', side_effect=prepare), \
+             patch('mybot.services.workspace_initializer.analyze_full_history', side_effect=analyze):
+            await controller.activate(201, AsyncMock(), full_analysis=True)
+            await asyncio.wait_for(entered.wait(), 2)
+            await asyncio.wait_for(controller.pause(), 2)
+        self.assertTrue(cancelled.is_set())
+        self.assertEqual(calls, 2)
+        self.assertEqual(controller.job['status'], 'paused')
+        self.assertFalse(controller.busy)
+        self.assertEqual(read_json(self.ws.root / 'initialization_state.json')['status'], 'paused')
+        self.assertEqual(len(list((self.ws.chunk_analysis / 'pipeline_v1' / 'analysis').glob('*.json'))), 1)
+        self.assertEqual(self.ws.chat_history.read_bytes(), history_before)
+
     async def test_prompt_loads_only_account_style_and_current_workspace(self):
         self.history(2)
         patches = self.ai_patches()
@@ -167,7 +202,7 @@ class PreparationTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('local_private_fact', prompt)
         self.assertEqual(search.call_args.kwargs['base_embeddings_filename'], second.memory_embeddings)
 
-    async def test_new_runtime_runs_full_pipeline_and_legacy_does_not(self):
+    async def test_reply_runtime_skips_legacy_pipeline_unless_explicit(self):
         from mybot.services.dialog_runtime import prepare_dialog_runtime
         dialog, me = NS(id=201, name='First'), NS(id=101)
         self.history(2)
@@ -181,10 +216,12 @@ class PreparationTests(unittest.IsolatedAsyncioTestCase):
              patch('mybot.services.dialog_runtime.WorkspaceInitializer') as initializer:
             initializer.return_value.run = AsyncMock()
             runtime = await prepare_dialog_runtime(Mock(), dialog, me, NS(), progress=AsyncMock())
-            initializer.return_value.run.assert_awaited_once()
+            initializer.return_value.run.assert_not_awaited()
+            self.assertIsNone(runtime.episode_tracker)
             self.assertEqual(runtime.workspace.root, self.ws.root)
             write_json(self.ws.agent_memory, {})
             write_json(self.ws.memory_embeddings, {'memories': []})
+            write_json(self.ws.root / 'initialization_state.json', {'status': 'failed'})
             initializer.return_value.run.reset_mock()
             await prepare_dialog_runtime(Mock(), dialog, me, NS(), progress=AsyncMock())
             initializer.return_value.run.assert_not_awaited()

@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace as NS
 from unittest.mock import AsyncMock, Mock, patch
 
-from telegram.error import BadRequest
+from telegram.error import BadRequest, TimedOut
 from mybot.telegram.bot_menu import BotMenu
 from mybot.telegram.bot_keyboards import main_menu, dialogs_menu
 from mybot.telegram.bot_interface import BotInterface
@@ -103,7 +103,7 @@ class ControlTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_owner_and_confirmation_required(self):
         bot = self.bot()
-        bot.runtime_controller = NS(activate=AsyncMock())
+        bot.runtime_controller = NS(activate=AsyncMock(), busy=False)
         context = NS(user_data={})
         await bot.callbacks.handle(update(data='ui:activate:42'), context)
         bot.runtime_controller.activate.assert_not_awaited()
@@ -113,6 +113,101 @@ class ControlTests(unittest.IsolatedAsyncioTestCase):
         await bot.callbacks.handle(update(data='ui:activate:42'), context)
         bot.runtime_controller.activate.assert_awaited_once()
         self.assertNotIn('pending_dialog', context.user_data)
+
+    async def test_old_memory_button_only_updates_new_history_and_full_analysis_is_disabled(self):
+        bot = self.bot()
+        bot.workspace = NS(dialog_id=42)
+        bot.runtime_controller = NS(activate=AsyncMock(), update_history=AsyncMock(return_value=True), busy=False)
+        context = NS(user_data={})
+        await bot.callbacks.handle(update(data='ui:update_memory'), context)
+        bot.runtime_controller.activate.assert_not_awaited()
+        bot.runtime_controller.update_history.assert_not_awaited()
+        context.user_data['pending_full'] = 42
+        await bot.callbacks.handle(update(data='ui:confirm_full'), context)
+        bot.runtime_controller.activate.assert_not_awaited()
+        self.assertEqual(bot.menu.show.await_args.args[1], 'Меню изменилось.')
+
+    async def test_progress_has_cancel_for_analysis_and_history_sync(self):
+        bot = self.bot()
+        for job, task in [({'status': 'running'}, None),
+                          ({'status': 'ready'}, NS(done=lambda: False))]:
+            controller = RuntimeController(Mock(), NS(id=1), bot)
+            controller.busy, controller.job, controller.finish_task = True, job, task
+            bot.runtime_controller = controller
+            await bot.callbacks.show(message(), 'Progress')
+            markup = bot.menu.show.await_args.args[2]
+            self.assertIn('ui:cancel_update', [button.callback_data for row in markup.inline_keyboard
+                                       for button in row])
+
+    async def test_terminal_preparation_message_has_no_cancel_even_before_busy_is_cleared(self):
+        bot = self.bot()
+        controller = RuntimeController(Mock(), NS(id=1), bot)
+        bot.runtime_controller = controller
+        controller.busy = True
+        for status in ('ready', 'failed', 'paused'):
+            controller.job = {'status': status}
+            await bot.callbacks.show(message(), 'Finished')
+            markup = bot.menu.show.await_args.args[2]
+            self.assertNotIn('ui:cancel_update', [button.callback_data
+                for row in markup.inline_keyboard for button in row])
+        controller.update_task = NS(done=lambda: False)
+        controller.update_committed = True
+        await bot.callbacks.dispatch('ui:status', update(), NS(user_data={}))
+        markup = bot.menu.show.await_args.args[2]
+        self.assertNotIn('ui:cancel_update', [button.callback_data
+            for row in markup.inline_keyboard for button in row])
+
+    def test_main_menu_has_one_update_and_no_analysis_or_progress_buttons(self):
+        from mybot.telegram.bot_keyboards import detailed_menu
+        actions = [button.callback_data for active in (True, False)
+                   for row in main_menu(active).inline_keyboard for button in row]
+        self.assertNotIn('ui:update_history', actions)
+        self.assertIn('ui:learn', actions)
+        self.assertNotIn('ui:more', actions)
+        extra = [b.callback_data for row in detailed_menu(True).inline_keyboard for b in row]
+        self.assertNotIn('ui:update_history', extra)
+        self.assertFalse(set(actions) & {'ui:status', 'ui:resume', 'ui:pause',
+                                        'ui:full_analysis', 'ui:update_memory', 'ui:finish_dialog'})
+
+    async def test_pause_runs_before_callback_ack_even_when_telegram_fails(self):
+        for error in (BadRequest('Query is too old'), TimedOut()):
+            bot = self.bot()
+            controller = NS(pause=AsyncMock(), busy=False,
+                            job={'status': 'paused'}, last_status='Paused')
+            bot.runtime_controller = controller
+            event = update(data='ui:pause')
+            async def acknowledge():
+                controller.pause.assert_not_awaited()
+                raise error
+            event.callback_query.answer = AsyncMock(side_effect=acknowledge)
+            await bot.callbacks.handle(event, NS(user_data={}))
+            controller.pause.assert_not_awaited()
+            self.assertEqual(bot.menu.show.await_args.args[1], 'Меню изменилось.')
+
+    async def test_non_owner_cannot_pause(self):
+        bot = self.bot()
+        bot.runtime_controller = NS(pause=AsyncMock())
+        await bot.callbacks.handle(update(data='ui:pause', owner=2), NS(user_data={}))
+        bot.runtime_controller.pause.assert_not_awaited()
+
+    async def test_ack_timeout_does_not_discard_or_repeat_lesson_action(self):
+        bot = self.bot()
+        event = update(data='ui:lesson')
+        event.callback_query.answer = AsyncMock(side_effect=TimedOut())
+        bot.callbacks.dispatch = AsyncMock()
+        context = NS(user_data={})
+        await bot.callbacks.handle(event, context)
+        event.callback_query.answer.assert_awaited_once()
+        bot.callbacks.dispatch.assert_awaited_once_with('ui:lesson', event, context)
+
+    async def test_unrelated_ack_error_is_not_silenced(self):
+        bot = self.bot()
+        event = update(data='ui:lesson')
+        event.callback_query.answer = AsyncMock(side_effect=BadRequest('Unexpected request error'))
+        bot.callbacks.dispatch = AsyncMock()
+        with self.assertRaises(BadRequest):
+            await bot.callbacks.handle(event, NS(user_data={}))
+        bot.callbacks.dispatch.assert_not_awaited()
 
     async def test_old_mood_button_no_longer_enables_input(self):
         bot = self.bot()

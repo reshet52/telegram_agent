@@ -246,6 +246,8 @@ async def build_ai_request(
     workspace=None,
     use_correction_examples=None,
     history_only=False,
+    separate_dialog=False,
+    reply_count=3,
 ):
     # Historical evaluation cannot use present-day profiles, memory, goals or indexes:
     # even a summary can contain the held-out answer or events after the cutoff.
@@ -260,6 +262,8 @@ async def build_ai_request(
             messages
         )
     )
+    if separate_dialog:
+        dialog_context = 'Переданы отдельными сообщениями user/assistant после этих сведений. Отвечай на конец этой переписки.'
 
     user_profile = format_memory(
         memory.get(
@@ -429,7 +433,7 @@ source_kind различает реально отправленный отве�
 из него другие чувства, намерения или обещания.
 
 Следуй формату системной инструкции. Когда владелец запрашивает варианты,
-подготовь ровно три варианта ответа, не заменяя их решением подождать.
+подготовь {'один ответ без нумерации' if reply_count == 1 else 'ровно три варианта ответа'}, не заменяя ответ решением подождать.
 
 ВАЖНЫЕ ПРАВИЛА:
 
@@ -468,6 +472,5 @@ source_kind различает реально отправленный отве�
 если пользователь обычно отвечал
 несколькими сообщениями.
 
-10. Верни JSON решения по системной инструкции. Тактика и вопрос владельцу
-не входят в тексты вариантов для собеседника.
+10. {'Верни только текст одного ответа собеседнику без JSON, нумерации и объяснений.' if reply_count == 1 else 'Верни JSON решения по системной инструкции. Тактика и вопрос владельцу не входят в тексты вариантов для собеседника.'}
 """.strip()

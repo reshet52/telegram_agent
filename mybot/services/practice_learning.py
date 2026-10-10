@@ -4,6 +4,23 @@ from mybot.storage.deletions import load_deleted_message_ids
 from mybot.storage.reply_practice import PracticeStore
 
 
+def chosen_reply(case, expected):
+    """One explicit preference per exercise; negative ratings are not SFT targets."""
+    if case.get('learning_disabled') or case.get('purpose') == 'holdout':
+        return None
+    if case.get('owner_correction'):
+        return 'owner_correction_not_sent', case['owner_correction']['text']
+    if case.get('use_original'):
+        return 'historical_sent_reply', '\n\n'.join(m['text'] for m in expected)
+    good = [(value['at'], int(number)) for number, value in case['ratings'].items()
+            if value['rating'] == 'good' and 1 <= int(number) <= len(case['variants'])
+            and not case.get('issues', {}).get(number)]
+    if good:
+        _, number = max(good)
+        return 'approved_suggestion_not_sent', case['variants'][number - 1]
+    return None
+
+
 def confirmed_examples(workspace, limit=100):
     store = PracticeStore(workspace)
     if not store.root.exists():
@@ -19,19 +36,9 @@ def confirmed_examples(workspace, limit=100):
             context, expected = store.source(case, messages=messages, deleted=deleted)
         except ValueError:
             continue
-        correction = case.get('owner_correction')
-        source_kind, text = None, None
-        if correction:
-            source_kind, text = 'owner_correction_not_sent', correction['text']
-        elif case.get('use_original'):
-            source_kind, text = 'historical_sent_reply', '\n\n'.join(m['text'] for m in expected)
-        else:
-            good = [(value['at'], int(number)) for number, value in case['ratings'].items()
-                    if value['rating'] == 'good' and int(number) <= len(case['variants'])]
-            if good:
-                _, number = max(good)
-                source_kind, text = 'approved_suggestion_not_sent', case['variants'][number - 1]
-        if text:
+        chosen = chosen_reply(case, expected)
+        if chosen:
+            source_kind, text = chosen
             incoming = []
             for message in reversed(context):
                 if message['sender'] == 'Я':

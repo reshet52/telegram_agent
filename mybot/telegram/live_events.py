@@ -256,6 +256,9 @@ class LiveEvents:
                 except Exception:
                     logging.exception("Не удалось сохранить исходящее сообщение в журнале")
 
+            controller = getattr(self.bot_interface, 'runtime_controller', None)
+            if controller is not None and hasattr(controller, 'idle_history'):
+                controller.idle_history.schedule(self, new_message)
             append_message_data(
                 new_message,
                 filename=
@@ -266,6 +269,8 @@ class LiveEvents:
             self.recent_messages.append(
                 new_message
             )
+            from mybot.services.message_order import ordered_messages
+            self.recent_messages[:] = ordered_messages(self.recent_messages)
 
             if (
                 len(self.recent_messages)
@@ -322,6 +327,8 @@ class LiveEvents:
                     logging.exception("Не удалось показать исходящее сообщение в боте")
 
             try:
+                if self.episode_tracker is None:
+                    return  # Minimal reply runtime never creates legacy embeddings.
                 new_episode = (
                     await
                     process_live_episode_message(

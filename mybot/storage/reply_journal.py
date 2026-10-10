@@ -137,6 +137,22 @@ def get_generation_evidence(workspace, generation_id):
     return {'request': json.loads(row[0]), 'decision': json.loads(row[1])} if row else None
 
 
+def save_mixed_generation(workspace, record):
+    """Upsert provider results without renumbering partial candidates."""
+    if (record['account_id'], record['dialog_id']) != (workspace.account_id, workspace.dialog_id):
+        raise ValueError('Генерация принадлежит другому диалогу.')
+    key = record['id']
+    variants = [dict(v, variant_id=f"{key}:{v['number']}") for v in record['variants']]
+    with closing(_open(workspace)) as connection, connection:
+        connection.execute('INSERT OR IGNORE INTO generations VALUES (?, ?, ?, ?, ?, ?, ?)',
+            (key, workspace.account_id, workspace.dialog_id, datetime.now(timezone.utc).isoformat(),
+             record['context_message_id'], 'mixed', '[]'))
+        connection.execute('UPDATE generations SET variants_json=? WHERE generation_id=? AND account_id=? AND dialog_id=?',
+            (json.dumps(variants, ensure_ascii=False), key, workspace.account_id, workspace.dialog_id))
+        connection.execute('INSERT OR REPLACE INTO generation_evidence VALUES (?, ?, ?)',
+            (key, json.dumps(record, ensure_ascii=False), '{}'))
+
+
 REVIEW_LABELS = {
     'good': 'Подходит', 'tactic': 'Не та реакция',
     'style': 'Не мой стиль', 'facts': 'Выдуманы факты',
@@ -252,10 +268,21 @@ def get_generation(workspace, generation_id):
     return {"context_message_id": row[0], "variants": json.loads(row[1])}
 
 
+def generation_has_draft(workspace, generation_id):
+    with closing(_open(workspace)) as connection:
+        return bool(connection.execute('SELECT 1 FROM reply_drafts WHERE generation_id=? AND account_id=? AND dialog_id=? AND status IN (\'ready\', \'kept\') LIMIT 1',
+            (generation_id, workspace.account_id, workspace.dialog_id)).fetchone())
+
+
 def create_draft(workspace, generation_id, variant_number):
     generation = get_generation(workspace, generation_id)
     if generation is None:
         raise ValueError("Вариант относится к другому или недоступному диалогу.")
+    evidence = get_generation_evidence(workspace, generation_id)
+    if evidence and evidence['request'].get('context_kind') == 'historical':
+        raise ValueError('Выберите учебный ответ в карточке обучения.')
+    if evidence and evidence['request'].get('stale'):
+        raise ValueError('Переписка изменилась. Запросите новые варианты.')
     with closing(_open(workspace)) as connection:
         if connection.execute("SELECT 1 FROM generation_rejections WHERE generation_id=?",
                               (generation_id,)).fetchone():

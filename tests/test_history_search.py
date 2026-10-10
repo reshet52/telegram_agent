@@ -134,14 +134,11 @@ class HistorySearchTests(unittest.IsolatedAsyncioTestCase):
                     effective_chat=NS(id=1, type="private"))
         context = NS(user_data={"pending_reply_edit": (42, "old-draft", 10)})
         await bot.callbacks.dispatch("ui:history_search", update, context)
-        self.assertEqual(context.user_data["awaiting_history_search"], 42)
-        self.assertNotIn("pending_reply_edit", context.user_data)
+        self.assertNotIn('awaiting_history_search', context.user_data)
+        self.assertNotIn('pending_reply_edit', context.user_data)
         await bot.text_instruction(update, context)
-        bot.answer_history_question.assert_awaited_once_with(update, source.text)
+        bot.answer_history_question.assert_not_awaited()
         bot.send_generated_answers.assert_not_awaited()
-        await bot.callbacks.dispatch("ui:history_search", update, context)
-        await bot.callbacks.dispatch("ui:home", update, context)
-        self.assertNotIn("awaiting_history_search", context.user_data)
 
     async def test_plain_text_requires_explicit_reply_action(self):
         bot = BotInterface(1, [], object(), SessionState(), workspace=self.workspace)

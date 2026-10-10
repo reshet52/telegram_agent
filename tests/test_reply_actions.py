@@ -41,7 +41,7 @@ class ReplyActionTests(unittest.IsolatedAsyncioTestCase):
         self.bot = BotInterface(1, [], NS(), SessionState(), workspace=self.workspace,
                                 telegram_client=Mock())
         self.bot.telegram_client.send_message = AsyncMock()
-        self.bot.runtime_controller = NS(busy=False, lock=asyncio.Lock())
+        self.bot.runtime_controller = NS(busy=False, lock=asyncio.Lock(), refresh_reply_context=AsyncMock())
         self.bot.menu = NS(show=AsyncMock(), move_to_bottom=AsyncMock())
         self.bot.application = NS(bot=NS(send_message=AsyncMock(),
                                          edit_message_text=AsyncMock()))
@@ -141,24 +141,24 @@ class ReplyActionTests(unittest.IsolatedAsyncioTestCase):
         record_outgoing_reply(self.workspace, {'message_id': 301, 'sender': 'Я',
             'text': 'first', 'type': 'text'})
         self.bot.callbacks.show = AsyncMock()
-        await self.bot.callbacks.dispatch('ui:fb:42:301', update(), self.context)
+        await self.bot.feedback.handle('ui:fb:42:301')
         markup = self.bot.callbacks.show.await_args.args[2]
         link_action = markup.inline_keyboard[0][0].callback_data
         self.assertLessEqual(len(link_action.encode()), 64)
         self.assertEqual(self.table('outgoing_replies')[0]['result'], None)
-        await self.bot.callbacks.dispatch(link_action, update(), self.context)
+        await self.bot.feedback.handle(link_action)
         self.assertEqual(self.table('outgoing_replies')[0]['result'], 'linked_pending')
         finalize_action = self.bot.callbacks.show.await_args.args[2].inline_keyboard[0][0].callback_data
-        await self.bot.callbacks.dispatch(finalize_action, update(), self.context)
+        await self.bot.feedback.handle(finalize_action)
         self.assertEqual(self.table('outgoing_replies')[0]['result'],
                          'accepted_without_edit')
         self.bot.workspace = self.other
-        await self.bot.callbacks.dispatch('ui:fb:42:301', update(), self.context)
+        await self.bot.feedback.handle('ui:fb:42:301')
         self.assertIn('Откройте исходный диалог',
                       self.bot.callbacks.show.await_args.args[1])
         record_outgoing_reply(self.other, {'message_id': 301, 'sender': 'Я',
             'text': 'different person', 'type': 'text'})
-        await self.bot.callbacks.dispatch(link_action, update(), self.context)
+        await self.bot.feedback.handle(link_action)
         with closing(sqlite3.connect(self.other.reply_journal)) as connection:
             self.assertIsNone(connection.execute(
                 'SELECT result FROM outgoing_replies WHERE message_id=301').fetchone()[0])
@@ -167,7 +167,7 @@ class ReplyActionTests(unittest.IsolatedAsyncioTestCase):
         await self.bot.send_outgoing_message('Anna',
             {'message_id': 501, 'sender': 'Я', 'text': 'first\n\nsecond'})
         markup = self.bot.application.bot.send_message.await_args.kwargs['reply_markup']
-        self.assertEqual(markup.inline_keyboard[0][0].callback_data, 'ui:fb:42:501')
+        self.assertIsNone(markup)
         self.bot.telegram_client.send_message.assert_not_awaited()
 
     async def test_generated_variant_is_kept_when_home_is_opened(self):
@@ -203,10 +203,10 @@ class ReplyActionTests(unittest.IsolatedAsyncioTestCase):
                          for button in row]
         self.assertNotIn('💬 Диалоги', active_labels)
         self.assertNotIn('⌨️ Печать', active_labels)
-        self.assertIn('🫥 Скрыть пульт', active_labels)
+        self.assertEqual(active_labels, ['Ответ', 'Указания для ответа', 'Выбор диалога', 'Обучение'])
         global_labels = [button.text for row in control_panel(active=False).keyboard
                          for button in row]
-        self.assertIn('💬 Диалоги', global_labels)
+        self.assertEqual(global_labels, ['Выбор диалога'])
         self.assertNotIn('✍️ Ответ', global_labels)
 
     async def test_hide_and_show_panel(self):
@@ -233,10 +233,6 @@ class ReplyActionTests(unittest.IsolatedAsyncioTestCase):
         self.bot.reply_service = object()
         self.bot.agent_manager.selected_dialog = NS(id=42)
         await self.bot.callbacks.dispatch('ui:leave', update(), self.context)
-        listener.unregister.assert_awaited_once()
-        self.assertIsNone(self.bot.workspace)
-        self.assertIsNone(self.bot.reply_service)
-        self.assertIsNone(self.bot.agent_manager.selected_dialog)
-        self.assertTrue(any(button.callback_data == 'ui:dialogs:0'
-                            for row in self.bot.menu.show.await_args.args[2].inline_keyboard
-                            for button in row))
+        listener.unregister.assert_not_awaited()
+        self.assertIsNotNone(self.bot.workspace)
+        self.assertEqual(self.bot.menu.show.await_args.args[1], 'Меню изменилось.')

@@ -10,6 +10,8 @@ from mybot.config import Config
 from mybot.ai.reply_contract import parse_decision
 from mybot.ai.reply_provider import request_snapshot
 from mybot.storage.atomic import write_text
+from mybot.services.style_versions import selected
+from mybot.services.message_order import context_snapshot
 
 
 DEFAULT_INSTRUCTION = (
@@ -76,11 +78,20 @@ class ReplyService:
 """.strip()
 
 
-    async def generate(
+    async def generate(self, *args, **kwargs):
+        from mybot.services.online_learning import request_started, request_finished
+        request_started(self.workspace)
+        try:
+            return await self._generate(*args, **kwargs)
+        finally:
+            request_finished(self.workspace)
+
+    async def _generate(
         self,
         instruction=None,
         current_mood=None,
         allow_decision=False,
+        force_reply=False,
     ):
         if not instruction:
             instruction = (
@@ -92,11 +103,8 @@ class ReplyService:
             current_mood
         )
 
-        messages_snapshot = list(
-            self.recent_messages
-        )
-
         async with self.generation_lock:
+            messages_snapshot = context_snapshot(self.recent_messages)
             self.last_decision = None
             self.last_request_snapshot = None
             self.last_context_message_id = max(
@@ -105,14 +113,17 @@ class ReplyService:
             self.last_trigger_text = "\n".join(
                 item.get("text") or "" for item in get_current_incoming(messages_snapshot)
                 if item.get("text"))[:2000]
-            ai_request = (
-                await build_ai_request(
+            version = selected(self.workspace) if self.workspace else 'configured'
+            if version != 'configured':
+                from mybot.ai.local_context import build_local_context
+                ai_request = build_local_context(messages_snapshot, instruction, self.memory, self.workspace)
+            else:
+                ai_request = await build_ai_request(
                     messages_snapshot,
                     instruction,
                     self.memory,
-                    workspace=self.workspace
+                    workspace=self.workspace,
                 )
-            )
 
             if self.workspace is None:
                 preview_filename = (
@@ -132,17 +143,41 @@ class ReplyService:
                 exist_ok=True
             )
 
-            snapshot = request_snapshot(ai_request, allow_decision=allow_decision)
+            if version != 'configured':
+                from mybot.ai import local_reply
+                snapshot = local_reply.snapshot(ai_request, self.workspace, version,
+                    messages=local_reply.live_messages(ai_request, messages_snapshot))
+            else:
+                snapshot = request_snapshot(ai_request, allow_decision=allow_decision)
             snapshot['context_message_id'] = self.last_context_message_id
             snapshot['context_message_ids'] = [m['message_id'] for m in messages_snapshot
                                                 if m.get('message_id') is not None]
             write_text(preview_path, json.dumps(snapshot, ensure_ascii=False, indent=2))
 
-            answers = (
-                await generate_answers(
-                    ai_request, allow_decision=allow_decision,
-                )
-            )
+            if version != 'configured':
+                if allow_decision and not force_reply:
+                    from mybot.services.decision_task import messages as decision_messages
+                    decision_request = local_reply.snapshot('', self.workspace, version,
+                        messages=decision_messages(messages_snapshot), count=1)
+                    decision_request['context_message_ids'] = snapshot['context_message_ids']
+                    try:
+                        action = await local_reply.decide(decision_request)
+                    finally:
+                        snapshot['decision_request'] = decision_request
+                        write_text(preview_path, json.dumps(snapshot, ensure_ascii=False, indent=2))
+                    if action == 'wait':
+                        self.require_current(messages_snapshot)
+                        answers = json.dumps({'action': 'wait', 'tactic': 'Пауза',
+                            'owner_note': 'Сейчас лучше не отвечать. Если нужен ответ, запросите варианты явно.',
+                            'variants': []}, ensure_ascii=False)
+                        self.last_decision = parse_decision(answers)
+                        self.last_request_snapshot = snapshot
+                        return answers
+                answers = json.dumps({'variants': await local_reply.generate(snapshot)}, ensure_ascii=False)
+                write_text(preview_path, json.dumps(snapshot, ensure_ascii=False, indent=2))
+            else:
+                answers = await generate_answers(ai_request, allow_decision=allow_decision)
+            self.require_current(messages_snapshot)
             self.last_decision = parse_decision(answers)
             if not allow_decision and self.last_decision and self.last_decision['action'] != 'reply':
                 self.last_decision = None
@@ -150,6 +185,11 @@ class ReplyService:
             self.last_request_snapshot = snapshot
 
         return answers
+
+    def require_current(self, snapshot):
+        if context_snapshot(self.recent_messages) != snapshot:
+            raise ValueError('Переписка изменилась во время генерации. Нажмите «Ответ» ещё раз, '
+                             'чтобы получить варианты для последних сообщений.')
 
 
     @staticmethod

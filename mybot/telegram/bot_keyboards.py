@@ -6,31 +6,17 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMa
 DIALOGS_PAGE_SIZE = 8
 
 
+def detailed_menu(active=False, panel_hidden=False):
+    return main_menu(active, panel_hidden)
+
+
 def main_menu(active=False, panel_hidden=False):
+    rows = [[InlineKeyboardButton('Выбор диалога', callback_data='ui:dialogs:0')]]
     if active:
-        rows = [
-            [InlineKeyboardButton("✍️ Ответ", callback_data="ui:reply"),
-             InlineKeyboardButton("📝 Указания для ответа", callback_data="ui:reply_instruction")],
-            [InlineKeyboardButton("🔎 Поиск по истории", callback_data="ui:history_search"),
-             InlineKeyboardButton("📖 Контекст", callback_data="ui:context")],
-            [InlineKeyboardButton("🎯 Цель диалога", callback_data="ui:goal"),
-             InlineKeyboardButton("🧠 Память", callback_data="ui:memory")],
-            [InlineKeyboardButton("🎲 Случайный факт", callback_data="ui:random_fact"),
-             InlineKeyboardButton("🧪 Проверка поиска", callback_data="ui:benchmark")],
-            [InlineKeyboardButton("🎓 Тренировка на истории", callback_data="ui:practice")],
-            [InlineKeyboardButton("🔄 Обновить историю и завершить", callback_data="ui:finish_dialog")],
-            [InlineKeyboardButton("⬅️ Выйти из диалога", callback_data="ui:leave")],
-        ]
-    else:
-        rows = [
-            [InlineKeyboardButton("💬 Диалоги", callback_data="ui:dialogs:0")],
-            [InlineKeyboardButton("🖋 Мой стиль", callback_data="ui:style"),
-             InlineKeyboardButton("⏳ Подготовка", callback_data="ui:status")],
-            [InlineKeyboardButton("⚙️ Настройки", callback_data="ui:settings")],
-        ]
-    rows.append([InlineKeyboardButton(
-        "👁 Показать пульт" if panel_hidden else "🫥 Скрыть пульт",
-        callback_data="ui:panel_show" if panel_hidden else "ui:panel_hide")])
+        rows = [[InlineKeyboardButton('Ответ', callback_data='ui:reply'),
+                 InlineKeyboardButton('Указания для ответа', callback_data='ui:reply_instruction')],
+                [InlineKeyboardButton('Выбор диалога', callback_data='ui:dialogs:0'),
+                 InlineKeyboardButton('Обучение', callback_data='ui:learn')]]
     return InlineKeyboardMarkup(rows)
 
 
@@ -61,6 +47,9 @@ def dialogs_menu(dialogs, page):
 
 
 PANEL_ACTIONS = {
+    'Ответ': 'ui:reply', 'Указания для ответа': 'ui:reply_instruction',
+    'Выбор диалога': 'ui:dialogs:0', 'Обучение': 'ui:learn',
+    "💬 Выбрать диалог": "ui:dialogs:0",
     "💬 Диалоги": "ui:dialogs:0", "✍️ Ответ": "ui:reply",
     "📝 Указания": "ui:reply_instruction",
     "📖 Контекст": "ui:context", "🔎 История": "ui:history_search",
@@ -68,10 +57,12 @@ PANEL_ACTIONS = {
 }
 
 
+def start_panel(active=True):
+    return control_panel(active)
+
+
 def control_panel(active=False):
-    labels = (["✍️ Ответ", "📝 Указания", "📖 Контекст", "🔎 История",
-               "🏠 Меню", "🫥 Скрыть пульт"]
-              if active else ["💬 Диалоги", "🏠 Меню", "🫥 Скрыть пульт"])
-    return ReplyKeyboardMarkup([labels[i:i + 2] for i in range(0, len(labels), 2)],
-                               resize_keyboard=True, is_persistent=True,
-                               input_field_placeholder="Выберите действие на пульте")
+    rows = ([['Ответ', 'Указания для ответа'], ['Выбор диалога', 'Обучение']]
+            if active else [['Выбор диалога']])
+    return ReplyKeyboardMarkup(rows, resize_keyboard=True, is_persistent=True,
+                               input_field_placeholder='Выберите действие')

@@ -10,6 +10,7 @@ from uuid import uuid4
 from mybot.storage.atomic import read_json, write_json
 from mybot.storage.history import load_all_messages
 from mybot.storage.deletions import load_deleted_message_ids
+from mybot.services.conversation_boundaries import DEFAULT_GAP_SECONDS, crossing_reason, sessions, gap_seconds
 
 
 RATINGS = {'good': 'Отправил бы', 'style': 'Не мой стиль',
@@ -33,33 +34,33 @@ def digest(messages):
     return hashlib.sha256(json.dumps(messages, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
 
-def candidates(messages, deleted, used):
+def candidates(messages, deleted, used, *, threshold=DEFAULT_GAP_SECONDS):
     """Hold out a complete outgoing turn; never join across a deleted message."""
-    groups = []
-    for index, message in enumerate(messages):
-        outgoing = message.get('sender') == 'Я'
-        if not groups or groups[-1][0] != outgoing:
-            groups.append((outgoing, index, index + 1))
-        else:
-            groups[-1] = (outgoing, groups[-1][1], index + 1)
     result = []
-    for index, (outgoing, start, end) in enumerate(groups):
-        if not outgoing or index == 0 or messages[start]['message_id'] in used:
-            continue
-        # Include the complete incoming turn plus preceding context when it fits.
-        context_start = max(0, start - MAX_CONTEXT_MESSAGES)
-        if groups[index - 1][1] < context_start:
-            continue
-        context, expected = messages[context_start:start], messages[start:end]
-        combined = context + expected
-        if (not context or len(expected) > 10
-                or any(m['message_id'] in deleted for m in combined)
-                or any(m.get('type') not in {None, 'text'} or not isinstance(m.get('text'), str)
-                       or not m['text'].strip() for m in combined)
-                or sum(len(m['text']) for m in context) > MAX_CONTEXT_CHARS
-                or sum(len(m['text']) for m in expected) > 6000):
-            continue
-        result.append((context, expected))
+    for segment in sessions(messages, threshold):
+        groups = []
+        for index, message in enumerate(segment):
+            outgoing = message.get('sender') == 'Я'
+            if not groups or groups[-1][0] != outgoing:
+                groups.append((outgoing, index, index + 1))
+            else:
+                groups[-1] = (outgoing, groups[-1][1], index + 1)
+        for index, (outgoing, start, end) in enumerate(groups):
+            if not outgoing or index == 0 or segment[start]['message_id'] in used:
+                continue
+            context_start = max(0, start - MAX_CONTEXT_MESSAGES)
+            if groups[index - 1][1] < context_start:
+                continue
+            context, expected = segment[context_start:start], segment[start:end]
+            combined = context + expected
+            if (not context or len(expected) > 10 or crossing_reason(context, expected, threshold)
+                    or any(m['message_id'] in deleted for m in combined)
+                    or any(m.get('type') not in {None, 'text'} or not isinstance(m.get('text'), str)
+                           or not m['text'].strip() for m in combined)
+                    or sum(len(m['text']) for m in context) > MAX_CONTEXT_CHARS
+                    or sum(len(m['text']) for m in expected) > 6000):
+                continue
+            result.append((context, expected))
     return result
 
 
@@ -75,16 +76,17 @@ class PracticeStore:
 
     def get(self, key):
         value = read_json(self.path(key))
-        if (not isinstance(value, dict) or value.get('version') != 1 or value.get('id') != key
+        if (not isinstance(value, dict) or value.get('version') not in {1, 2} or value.get('id') != key
                 or value.get('account_id') != self.workspace.account_id
                 or value.get('dialog_id') != self.workspace.dialog_id):
             raise ValueError('Отрывок отсутствует, повреждён или относится к другому диалогу.')
         for field in ('context_ids', 'expected_ids'):
             ids = value.get(field)
-            if (not isinstance(ids, list) or not ids or any(type(i) is not int for i in ids)
+            if (not isinstance(ids, list) or (not ids and not (field == 'expected_ids' and value.get('version') == 2))
+                    or any(type(i) is not int for i in ids)
                     or ids != sorted(set(ids))):
                 raise ValueError('Повреждены ссылки на сообщения отрывка.')
-        if (max(value['context_ids']) >= min(value['expected_ids'])
+        if ((value['expected_ids'] and max(value['context_ids']) >= min(value['expected_ids']))
                 or not isinstance(value.get('source_digest'), str)
                 or not isinstance(value.get('ratings'), dict)
                 or not isinstance(value.get('variants'), list)):
@@ -102,19 +104,56 @@ class PracticeStore:
             raise ValueError('История содержит отсутствующие или повторяющиеся ID сообщений.')
         return [source_message(m) for m in sorted(messages, key=lambda m: m['message_id'])]
 
-    def create(self):
-        used = {case['expected_ids'][0] for case in self.records()}
-        options = candidates(self.history(), load_deleted_message_ids(self.workspace.deleted_message_ids), used)
+    def create(self, excluded_ids=()):
+        used = {case['expected_ids'][0] for case in self.records() if case['expected_ids']}
+        options = candidates(self.history(), load_deleted_message_ids(self.workspace.deleted_message_ids), used,
+                             threshold=gap_seconds(self.workspace))
+        excluded = set(excluded_ids)
+        options = [(context, expected) for context, expected in options
+                   if not excluded.intersection(m['message_id'] for m in context + expected)]
         if not options:
             raise ValueError('Новых подходящих текстовых отрывков нет. Можно вернуться к сохранённым.')
         context, expected = random.choice(options)
-        case = {'version': 1, 'id': uuid4().hex, 'account_id': self.workspace.account_id,
+        return self.create_from(context, expected)
+
+    def create_from(self, context, expected, purpose='practice'):
+        case = {'version': 2 if not expected else 1, 'id': uuid4().hex, 'account_id': self.workspace.account_id,
                 'dialog_id': self.workspace.dialog_id, 'created_at': now(),
                 'context_ids': [m['message_id'] for m in context],
                 'expected_ids': [m['message_id'] for m in expected],
                 'source_digest': digest(context + expected), 'status': 'prepared',
-                'variants': [], 'ratings': {}, 'revealed_at': None}
+                'variants': [], 'ratings': {}, 'revealed_at': None, 'purpose': purpose}
         write_json(self.path(case['id']), case)
+        return case
+
+    def confirm_action(self, key, action):
+        if action not in {'reply', 'wait'}:
+            raise ValueError('Неизвестный выбор действия.')
+        case = self.get(key)
+        self.source(case)
+        case['owner_action'] = {'action': action, 'at': now()}
+        write_json(self.path(key), case)
+        return case
+
+    def save_decision(self, key, decision, request):
+        case = self.get(key)
+        self.source(case)
+        if decision not in {'reply', 'wait'}:
+            raise ValueError('Некорректное решение модели.')
+        if case.get('model_action'):
+            return case
+        case['model_action'] = {'action': decision, 'version': request['version'],
+                                'at': now(), 'request': request}
+        write_json(self.path(key), case)
+        return case
+
+    def save_action_request(self, key, request):
+        case = self.get(key)
+        self.source(case)
+        if case.get('model_action'):
+            return case
+        case['action_request'] = request
+        write_json(self.path(key), case)
         return case
 
     def source(self, case, *, messages=None, deleted=None):
@@ -143,9 +182,10 @@ class PracticeStore:
         self.source(case)
         if case['variants']:
             return case
-        if (len(variants) != 3 or any(not isinstance(v, str) or not v.strip() for v in variants)
-                or len(set(variants)) != 3):
-            raise ValueError('Модель не вернула три разных варианта.')
+        count = case.get('variant_count', 3)
+        if (count not in (2, 3) or len(variants) != count or any(not isinstance(v, str) or not v.strip() for v in variants)
+                or len(set(variants)) != count):
+            raise ValueError(f'Модель не вернула {count} разных варианта.')
         case.update(variants=variants, status='generated', generated_at=now())
         write_json(self.path(key), case)
         return case
@@ -153,12 +193,25 @@ class PracticeStore:
     def rate(self, key, number, rating):
         case = self.get(key)
         self.source(case)
-        if number not in {1, 2, 3} or len(case['variants']) != 3 or rating not in RATINGS:
+        if number not in range(1, len(case['variants']) + 1) or not case['variants'] or rating not in RATINGS:
             raise ValueError('Оценка или вариант недоступны.')
         case['ratings'][str(number)] = {'rating': rating, 'at': now(),
                                        'after_reveal': bool(case['revealed_at'])}
         if rating == 'good':
             case['learning_disabled'] = False
+        write_json(self.path(key), case)
+        return case
+
+    def flag_issue(self, key, number, issue):
+        case = self.get(key)
+        self.source(case)
+        if issue not in {'reaction', 'facts', 'emoji', 'wording'} or number not in range(1, len(case['variants']) + 1):
+            raise ValueError('Отметка или вариант недоступны.')
+        flags = case.setdefault('issues', {}).setdefault(str(number), [])
+        if issue in flags:
+            flags.remove(issue)
+        else:
+            flags.append(issue)
         write_json(self.path(key), case)
         return case
 

@@ -7,7 +7,7 @@ import logging
 
 from telethon import TelegramClient, errors
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
-from telegram.error import BadRequest
+from telegram.error import BadRequest, NetworkError
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, MessageHandler, filters
 
 from mybot.app.session_state import SessionState
@@ -15,23 +15,21 @@ from mybot.config import Config
 from mybot.services.runtime_controller import RuntimeController
 from mybot.storage.control_state import ControlState
 from mybot.telegram.bot_interface import BotInterface
-from mybot.telegram.bot_keyboards import home_menu
 from mybot.telegram.bot_benchmark import clear_benchmark_input
+from mybot.telegram.startup_network import startup_request
 
 
-COMMANDS = {
-    "start": "start_command", "status": "status_command", "style": "style_command",
-    "panel": "panel_command", "dialogs": "dialogs_command", "select": "select_dialog_command",
-    "show": "show_command", "reply": "reply_command", "search": "search_command",
-    "goal": "goal_command",
-    "clear_goal": "clear_goal_command", "update_memory": "update_memory_command",
-}
+COMMANDS = {'start': 'start_command', 'reply': 'reply_command',
+            'dialogs': 'dialogs_command', 'select': 'select_dialog_command'}
 
 
 class AccountBot:
     def __init__(self, credentials):
         self.credentials = credentials
-        self.application = Application.builder().token(Config.AGENT_BOT_TOKEN).build()
+        self.application = (Application.builder().token(Config.AGENT_BOT_TOKEN)
+                            .connect_timeout(30).read_timeout(30).write_timeout(30)
+                            .get_updates_connect_timeout(30).get_updates_read_timeout(30).build())
+        self.application.add_error_handler(self._error)
         self.clients = {owner: TelegramClient(item.session, item.api_id, item.api_hash)
                         for owner, item in credentials.items()}
         self.interfaces = {}
@@ -42,6 +40,15 @@ class AccountBot:
             self.application.add_handler(CommandHandler(command, self._command(command)))
         self.application.add_handler(CallbackQueryHandler(self._callback, pattern=r"^(ui:|auth:)") )
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._text))
+
+    async def _error(self, update, context):
+        error = context.error
+        if isinstance(error, NetworkError) and not isinstance(error, BadRequest):
+            logging.warning('Сбой связи с Telegram (%s). Команда могла не завершиться; '
+                            'откройте меню повторно. Бот продолжает работу.', type(error).__name__)
+            return
+        logging.error('Ошибка обработки команды Telegram',
+                      exc_info=(type(error), error, error.__traceback__))
 
     def _owner(self, update):
         user, chat = update.effective_user, update.effective_chat
@@ -137,25 +144,20 @@ class AccountBot:
         self.interfaces[owner] = interface
         saved_id = interface.control_state.get("active_dialog_id")
         message = None
-        markup = None
         if saved_id is not None:
             try:
                 await controller.restore(int(saved_id))
             except Exception as error:
-                message = f"Не удалось восстановить диалог: {error}\nДанные сохранены. Откройте «Диалоги» или «Статус»."
-                markup = home_menu([[
-                    InlineKeyboardButton("💬 Диалоги", callback_data="ui:dialogs:0")], [
-                    InlineKeyboardButton("⏳ Статус", callback_data="ui:status")]])
+                message = f"Не удалось восстановить диалог: {error}\nДанные сохранены. Выберите диалог заново."
                 logging.exception("Не удалось восстановить диалог аккаунта %s", owner)
         elif controller.job.get("status") == "paused":
-            message = controller.last_status + "\n\nПодготовка приостановлена. Продолжение только по кнопке."
-            markup = home_menu([[
-                InlineKeyboardButton("▶️ Продолжить", callback_data="ui:resume")]])
+            message = "Предыдущая операция прервана. Сохранённые данные на месте. Выберите диалог для открытия."
         try:
             await interface.menu.clean_previous_menus()
+            await interface.menu.move_to_bottom()
             await interface.panel.install()
-            await interface.menu.show(None, message or interface.menu_title(),
-                                      markup or interface.main_menu())
+            if message:
+                await self.application.bot.send_message(chat_id=owner, text=message)
         except Exception:
             logging.exception("Не удалось восстановить меню для %s", owner)
         return interface
@@ -211,12 +213,9 @@ class AccountBot:
                 await self._login_screen(owner, f"Не удалось войти: {error}")
 
     async def start(self):
-        await self.application.initialize()
-        await self.application.bot.set_my_commands([
-            BotCommand("start", "Пульт управления"), BotCommand("dialogs", "Выбрать диалог"),
-            BotCommand("reply", "Предложить ответ"), BotCommand("status", "Прогресс подготовки"),
-            BotCommand("panel", "Показать пульт"), BotCommand("search", "Поиск по истории"),
-            BotCommand("goal", "Цель диалога"), BotCommand("clear_goal", "Сбросить цель")])
+        await startup_request(self.application.initialize)
+        await startup_request(self.application.bot.set_my_commands, [
+            BotCommand("start", "Пульт управления")])
         await self.application.updater.start_polling()
         await self.application.start()
         for owner in self.credentials:

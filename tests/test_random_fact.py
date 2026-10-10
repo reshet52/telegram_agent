@@ -134,11 +134,11 @@ class RandomFactTests(unittest.IsolatedAsyncioTestCase):
                     effective_chat=NS(id=1, type="private"))
         fact = validate_fact(self.output(), [self.records], set())
         bot.random_facts.extract = AsyncMock(return_value=fact)
-        await bot.callbacks.dispatch("ui:random_fact", update, NS(user_data={}))
+        await bot.random_fact_command(update)
         message.reply_text.assert_awaited_once()
         message.edit_text.assert_not_awaited()
         self.assertEqual(len(bot.random_facts.recent[(1, 42)]), 1)
-        await bot.callbacks.dispatch("ui:random_fact:43", update, NS(user_data={}))
+        await bot.random_fact_command(update, "43")
         bot.random_facts.extract.assert_awaited_once()
         bot.random_facts.extract = AsyncMock(side_effect=RuntimeError("offline"))
         with self.assertLogs(level="ERROR"):
@@ -150,9 +150,12 @@ class RandomFactTests(unittest.IsolatedAsyncioTestCase):
         bot.random_facts.extract.assert_awaited_once()
 
     def test_button_only_in_active_menu(self):
+        from mybot.telegram.bot_keyboards import detailed_menu
         for active in (True, False):
             actions = [button.callback_data for row in main_menu(active).inline_keyboard for button in row]
-            self.assertEqual('ui:random_fact' in actions, active)
+            self.assertNotIn('ui:random_fact', actions)
+            extra = [button.callback_data for row in detailed_menu(active).inline_keyboard for button in row]
+            self.assertNotIn('ui:random_fact', extra)
 
 
 if __name__ == '__main__':

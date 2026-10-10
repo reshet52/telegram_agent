@@ -5,7 +5,7 @@ from telegram.error import TelegramError
 
 from mybot.storage.reply_journal import (
     cancel_draft, create_draft, get_draft, get_generation,
-    mark_draft_kept, reject_generation, unreject_generation, update_draft_text,
+    mark_draft_kept, reject_generation, unreject_generation, update_draft_text, get_generation_evidence,
 )
 
 
@@ -16,10 +16,10 @@ def variants_text(variants):
     return "\n\n".join(f"Вариант {number}\n{variant}" for number, variant in enumerate(variants, 1))
 
 
-def variants_markup(generation_id):
+def variants_markup(generation_id, numbers=None):
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(str(number), callback_data=f"ui:rv:{generation_id}:{number}")
-         for number in range(1, 4)],
+         for number in (numbers if numbers is not None else range(1, 4))],
         [InlineKeyboardButton("🚫 Все не подходят", callback_data=f"ui:reject:{generation_id}")],
     ])
 
@@ -46,6 +46,15 @@ class BotReplyActions:
         generation = get_generation(workspace, generation_id)
         if generation is None:
             await self.show(source, "Варианты этого диалога недоступны.")
+            return
+        evidence = get_generation_evidence(workspace, generation_id)
+        if evidence and evidence['request'].get('sides'):
+            from mybot.telegram.bot_mixed_replies import card
+            record = evidence['request']
+            from mybot.services.mixed_replies import MixedReplies
+            record['stale'] = not MixedReplies(self.bot.reply_service).current(record)
+            text, markup = card(record)
+            await self.show(source, text, markup)
             return
         await self.show(source, variants_text([item["text"] for item in generation["variants"]]),
                         variants_markup(generation_id))
@@ -97,6 +106,11 @@ class BotReplyActions:
         if action.startswith(("ui:rv:", "ui:rve:")):
             try:
                 _, _, generation_id, number = action.split(":")
+                evidence = get_generation_evidence(workspace, generation_id)
+                if evidence and evidence['request'].get('sides'):
+                    from mybot.services.mixed_replies import MixedReplies
+                    if not MixedReplies(self.bot.reply_service).current(evidence['request']):
+                        raise ValueError('Переписка изменилась. Запросите новые варианты.')
                 draft_id = create_draft(workspace, generation_id, int(number))
             except (ValueError, IndexError) as error:
                 await self.show(source, str(error) or "Вариант недоступен.")

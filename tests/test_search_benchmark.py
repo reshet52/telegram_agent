@@ -51,11 +51,11 @@ class BenchmarkTests(unittest.IsolatedAsyncioTestCase):
     async def click(self, operation, key='', ws=None):
         action = button('test', operation, ws or self.ws, key).callback_data
         self.assertLessEqual(len(action.encode()), 64)
-        await self.bot.callbacks.dispatch(action, self.update, self.context)
+        await self.bot.benchmark.handle(action, self.update, self.context)
 
     async def text(self, value):
         self.source.text = value
-        await self.bot.text_instruction(self.update, self.context)
+        await self.bot.benchmark.handle_text(value, self.update, self.context)
 
     def test_store_restart_and_workspace_isolation(self):
         case = self.store.save_case(self.draft)

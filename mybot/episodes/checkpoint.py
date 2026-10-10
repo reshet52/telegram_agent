@@ -11,14 +11,18 @@ def pending_path(episodes_filename):
 
 def append_missing(path, records):
     path = Path(path)
-    existing = [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines()
-                if line.strip()] if path.exists() else []
+    previous = path.read_text(encoding='utf-8') if path.exists() else ''
+    existing = [json.loads(line) for line in previous.splitlines() if line.strip()]
     known = {item['episode_id'] for item in existing}
+    added = []
     for item in records:
         if item['episode_id'] not in known:
-            existing.append(item)
+            added.append(item)
             known.add(item['episode_id'])
-    write_text(path, ''.join(json.dumps(item, ensure_ascii=False) + '\n' for item in existing))
+    if added:
+        separator = '\n' if previous and not previous.endswith('\n') else ''
+        write_text(path, previous + separator + ''.join(
+            json.dumps(item, ensure_ascii=False) + '\n' for item in added))
 
 
 def recover_batch(episodes_filename, embeddings_filename):

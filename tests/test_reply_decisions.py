@@ -30,6 +30,64 @@ def decision(action='reply'):
 
 
 class DecisionTests(unittest.IsolatedAsyncioTestCase):
+    def test_local_live_prompt_ends_with_current_partner_turn(self):
+        from mybot.ai.local_reply import live_messages
+        result = live_messages('Historical reply: good morning', [
+            {'message_id': 1, 'sender': 'Я', 'text': 'My previous reply'},
+            {'message_id': 2, 'sender': 'Other', 'text': 'My current question'}])
+        self.assertEqual(result[-1], {'role': 'user', 'content': 'My current question'})
+        self.assertEqual(result[-2], {'role': 'assistant', 'content': 'My previous reply'})
+        self.assertIn('Historical reply', result[0]['content'])
+
+    async def test_reply_context_is_chronological_and_stale_result_is_rejected(self):
+        recent = [{'message_id': 3, 'text': 'Latest', 'sender': 'Other'},
+                  {'message_id': 2, 'text': 'Earlier', 'sender': 'Я'}]
+        service = ReplyService(recent, {}, self.ws)
+
+        async def generate(*args, **kwargs):
+            recent.append({'message_id': 4, 'text': 'New arrival', 'sender': 'Other'})
+            return json.dumps(decision())
+
+        with patch('mybot.services.reply_service.build_ai_request', AsyncMock(return_value='context')) as build, \
+             patch('mybot.services.reply_service.generate_answers', side_effect=generate):
+            with self.assertRaisesRegex(ValueError, 'Переписка изменилась'):
+                await service.generate()
+        self.assertEqual([m['message_id'] for m in build.await_args.args[0]], [2, 3])
+        self.assertEqual(service.last_trigger_text, 'Latest')
+        self.assertIsNone(service.last_request_snapshot)
+
+    async def test_reply_takes_snapshot_after_waiting_for_lock(self):
+        recent = [{'message_id': 1, 'text': 'Old', 'sender': 'Other'}]
+        service = ReplyService(recent, {}, self.ws)
+        await service.generation_lock.acquire()
+        with patch('mybot.services.reply_service.build_ai_request', AsyncMock(return_value='context')) as build, \
+             patch('mybot.services.reply_service.generate_answers', AsyncMock(return_value=json.dumps(decision()))):
+            task = asyncio.create_task(service.generate())
+            await asyncio.sleep(0)
+            recent.append({'message_id': 2, 'text': 'Latest', 'sender': 'Other'})
+            service.generation_lock.release()
+            await task
+        self.assertEqual([m['message_id'] for m in build.await_args.args[0]], [1, 2])
+
+    async def test_local_wait_uses_selected_adapter_and_force_generates_variants(self):
+        service = ReplyService([{'message_id': 3, 'text': 'Ciao', 'sender': 'Other'}], {}, self.ws)
+        def snapshot(prompt, workspace, version, **kwargs):
+            return {'provider': 'mlx', 'version': version, 'model': 'local',
+                    'messages': kwargs.get('messages', []), 'count': kwargs.get('count', 3)}
+        with patch('mybot.services.reply_service.selected', return_value='a' * 32), \
+             patch('mybot.services.reply_service.build_ai_request', AsyncMock(return_value='context')), \
+             patch('mybot.ai.local_reply.snapshot', side_effect=snapshot), \
+             patch('mybot.ai.local_reply.decide', AsyncMock(return_value='wait')) as decide, \
+             patch('mybot.ai.local_reply.generate', AsyncMock(return_value=['a', 'b', 'c'])) as generate:
+            result = await service.generate(allow_decision=True)
+            self.assertEqual(parse_decision(result)['action'], 'wait')
+            generate.assert_not_awaited()
+            self.assertEqual(decide.await_args.args[0]['version'], 'a' * 32)
+            self.assertEqual(service.last_request_snapshot['decision_request']['count'], 1)
+            forced = await service.generate(allow_decision=False, force_reply=True)
+            self.assertEqual(ReplyService.split_variants(forced), ['a', 'b', 'c'])
+            self.assertEqual(generate.await_args.args[0]['version'], 'a' * 32)
+
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
@@ -133,7 +191,7 @@ class DecisionTests(unittest.IsolatedAsyncioTestCase):
                      split_variants=ReplyService.split_variants, last_decision=data,
                      last_request_snapshot={'input': 'context'}, last_context_message_id=3)
         bot = BotInterface(1, [], service, SessionState(), self.ws, telegram_client=Mock())
-        bot.runtime_controller = NS(busy=False, lock=asyncio.Lock())
+        bot.runtime_controller = NS(busy=False, lock=asyncio.Lock(), refresh_reply_context=AsyncMock())
         bot.callbacks.show = AsyncMock()
         bot.send_long_text = AsyncMock()
         update = NS(effective_message=Mock(), effective_user=NS(id=1),

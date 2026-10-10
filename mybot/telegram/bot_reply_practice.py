@@ -18,7 +18,7 @@ class BotReplyPractice:
     async def overview(self, store):
         cases = store.records()
         rows = [[next_button(store.workspace)]]
-        rows.append([InlineKeyboardButton('Данные для дообучения', callback_data='ui:learning')])
+        rows.append([InlineKeyboardButton('Локальное обучение', callback_data='ui:learning')])
         for case in cases[:5]:
             label = 'Оценить' if case['variants'] else 'Продолжить'
             rows.append([button(f"{label} · {case['created_at'][:16]} · {len(case['ratings'])}/3",
@@ -28,7 +28,8 @@ class BotReplyPractice:
             'Тренировка на истории\n\n'
             'Оцените варианты или напишите свой. Одобренные примеры помогают '
             'следующим ответам в этом диалоге.\n'
-            'Один отрывок — один запрос модели. Веса модели не меняются.\n\n'
+            'Оценки собирают примеры. Кнопка «Локальное обучение» отдельно запускает '
+            'обновление весов на Mac. Варианты пока создаёт текущая модель ответов.\n\n'
             f'Отрывков: {len(cases)}. Последние пять:',
             InlineKeyboardMarkup(rows))
 

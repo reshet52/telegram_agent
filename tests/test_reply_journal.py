@@ -118,7 +118,7 @@ class JournalTests(unittest.IsolatedAsyncioTestCase):
                               split_variants=lambda value: ['a', 'b', 'c'],
                               last_context_message_id=88),
                            SessionState(), workspace=self.ws_a, telegram_client=Mock())
-        bot.runtime_controller = NS(busy=False, lock=asyncio.Lock())
+        bot.runtime_controller = NS(busy=False, lock=asyncio.Lock(), refresh_reply_context=AsyncMock())
         bot.callbacks.show = AsyncMock()
         bot.menu = NS(show=AsyncMock())
         bot.send_long_text = AsyncMock()

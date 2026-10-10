@@ -2,8 +2,9 @@
 
 import asyncio
 import logging
+import httpx
 
-from telegram.error import BadRequest, TelegramError
+from telegram.error import BadRequest, TelegramError, TimedOut
 from mybot.telegram.bot_panel import PANEL_TEXT, PANEL_HIDDEN_TEXT
 
 
@@ -36,7 +37,16 @@ class BotMenu:
 
     async def show(self, source, text, reply_markup=None):
         async with self.lock:
-            await self._show(source, text, reply_markup)
+            try:
+                await self._show(source, text, reply_markup)
+            except TimedOut as error:
+                # A connect timeout precedes delivery. Read/write timeouts can mean
+                # Telegram accepted the message: do not duplicate those sends.
+                if not isinstance(error.__cause__, httpx.ConnectTimeout):
+                    raise
+                logging.warning('Не удалось подключиться к Telegram для меню; повтор через секунду.')
+                await asyncio.sleep(1)
+                await self._show(source, text, reply_markup)
 
     async def _show(self, source, text, reply_markup=None):
         if source is not None and self.is_variant_message(source):
@@ -97,6 +107,10 @@ class BotMenu:
         for row in rows:
             for button in row:
                 data = getattr(button, "callback_data", None) or getattr(button, "data", None)
+                if isinstance(data, bytes) and data.startswith((b'ui:sl:', b'ui:s2:', b'ui:learn:')):
+                    return True
+                if isinstance(data, str) and data.startswith(('ui:sl:', 'ui:s2:', 'ui:learn:')):
+                    return True
                 if isinstance(data, bytes) and data.startswith((
                         b"ui:rv:", b"ui:rve:", b"ui:draft:", b"ui:db:",
                         b"ui:unreject:", b"ui:fb:", b"ui:rr:", b"ui:rp:rate:",

@@ -8,6 +8,7 @@ from uuid import uuid4
 from mybot.storage.atomic import read_json, write_json, write_text
 from mybot.storage.deletions import load_deleted_message_ids
 from mybot.storage.reply_practice import PracticeStore, candidates, digest, now
+from mybot.services.conversation_boundaries import gap_seconds
 
 
 SYSTEM = ('Продолжи личную переписку от лица владельца аккаунта в его манере. '
@@ -41,12 +42,14 @@ def prepare_dataset(workspace, limit=2000):
     store = PracticeStore(workspace)
     messages = store.history()
     deleted = load_deleted_message_ids(workspace.deleted_message_ids)
-    options = candidates(messages, deleted, set())
+    options = candidates(messages, deleted, set(), threshold=gap_seconds(workspace))
     if len(options) < 2:
         raise ValueError('Недостаточно текстовых ситуаций для обучения и отдельной проверки.')
     # The last fifth of source messages is held out. Drop every crossing window.
     cutoff = messages[max(1, int(len(messages) * .8))]['message_id']
     reserved = set()
+    from mybot.services.reply_evaluation import reserved as evaluation_reserved
+    reserved.update(evaluation_reserved(workspace))
     for case in store.records():
         # Keep practice source IDs reserved even when its source was later deleted.
         reserved.update(case['context_ids'] + case['expected_ids'])

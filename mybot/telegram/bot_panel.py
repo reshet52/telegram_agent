@@ -2,11 +2,12 @@
 
 from telegram import BotCommand, MenuButtonCommands, ReplyKeyboardRemove
 from telegram.error import TelegramError
-from mybot.telegram.bot_keyboards import control_panel
+from mybot.telegram.bot_keyboards import start_panel
 
 
 PANEL_TEXT = 'Пульт управления готов. Выберите действие возле поля ввода.'
 PANEL_HIDDEN_TEXT = 'Пульт скрыт. Вернуть: /panel или кнопка в меню.'
+START_TEXT = 'Бот запущен. Нажмите /start.'
 
 
 class BotPanel:
@@ -19,21 +20,10 @@ class BotPanel:
         api = self.interface.application.bot
         await api.set_my_commands([
             BotCommand('start', 'Пульт управления'),
-            BotCommand('dialogs', 'Выбрать диалог'),
-            BotCommand('reply', 'Предложить ответ'),
-            BotCommand('show', 'Показать контекст'),
-            BotCommand('status', 'Прогресс и продолжение подготовки'),
-            BotCommand('style', 'Общий стиль общения'),
-            BotCommand('search', 'Поиск по истории диалога'),
-            BotCommand('goal', 'Цель диалога'),
-            BotCommand('clear_goal', 'Сбросить цель'),
-            BotCommand('panel', 'Показать пульт'),
         ])
         await api.set_chat_menu_button(chat_id=self.interface.owner_id, menu_button=MenuButtonCommands())
-        if self.hidden:
-            await self.hide()
-        else:
-            await self.show()
+        self.hidden = True
+        await self._replace(START_TEXT, ReplyKeyboardRemove())
 
     async def _replace(self, text, markup):
         state = self.interface.control_state
@@ -54,7 +44,7 @@ class BotPanel:
 
     async def show(self):
         self.hidden = False
-        await self._replace(PANEL_TEXT, control_panel(active=self.interface.workspace is not None))
+        await self._replace(self.interface.menu_title(), start_panel(active=self.interface.workspace is not None))
 
     async def hide(self):
         self.hidden = True
